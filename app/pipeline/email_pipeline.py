@@ -26,11 +26,10 @@ def run_pipeline_from_email(
     *,
     session_id: str | None = None,
 ) -> dict[str, Any]:
-    """Email-ingest entry point: sandbox → extract → match_to_po → … or escalate.
+    """Email-ingest entry point: sandbox → extract → Neo4j → three-way → gate.
 
-    If ``match_to_po`` returns None, short-circuits to a GateDecision with
-    ``action="escalate"`` / ``reason="no matching PO found"`` - never runs
-    three-way match without a PO.
+    Always queries Neo4j and always records a three-way outcome. If no PO is
+    found, three-way is recorded as incomplete and the case escalates.
     """
     session_id = session_id or str(uuid.uuid4())
     token = set_session_id(session_id)
@@ -101,7 +100,7 @@ def run_pipeline_from_email(
             (
                 f"matched {matched.po_id}"
                 if matched
-                else "no matching PO - escalate (no three-way match)"
+                else "no matching PO - will record incomplete three-way + Neo4j check"
             ),
             matched=matched is not None,
             po_id=matched.po_id if matched else None,
@@ -109,6 +108,47 @@ def run_pipeline_from_email(
 
         if matched is None:
             status = "needs_manual_po_matching"
+            # Always query Neo4j even without a PO.
+            try:
+                from app.pipeline.match_validate_enforce import (
+                    _history_from_neo4j,
+                    _load_neo4j_vendor_context,
+                )
+
+                vendor_context = _load_neo4j_vendor_context(invoice.vendor_name)
+            except Exception:  # noqa: BLE001
+                vendor_context = {}
+
+            # Always record three-way outcome (incomplete without PO/GR).
+            validation = ValidationResult(
+                matched=False,
+                discrepancy_amount=round(float(invoice.invoice_amount), 2),
+                reason=(
+                    "Three-way match incomplete: no matching PO / goods receipt "
+                    "on file for this invoice."
+                ),
+            )
+            _audit(
+                "three_way_match",
+                "deterministic",
+                f"invoice=${invoice.invoice_amount:.2f} po=n/a gr=n/a",
+                f"matched=False - {validation.reason}",
+                matched=False,
+                discrepancy_amount=validation.discrepancy_amount,
+            )
+
+            history, history_source = _history_from_neo4j(
+                vendor_context, invoice.vendor_name
+            )
+            from app.pipeline.anomaly_checks import run_anomaly_checks
+
+            anomaly = run_anomaly_checks(
+                invoice,
+                None,
+                history,
+                history_source=history_source,
+            )
+
             decision = GateDecision(
                 action="escalate",
                 reason="no matching PO found",
@@ -117,7 +157,7 @@ def run_pipeline_from_email(
             _audit(
                 "gate_decision",
                 "deterministic",
-                "match_to_po returned None",
+                "match_to_po returned None (Neo4j + three-way still recorded)",
                 f"action=escalate rule_fired={decision.rule_fired} - {decision.reason}",
                 action=decision.action,
                 rule_fired=decision.rule_fired,
@@ -134,23 +174,12 @@ def run_pipeline_from_email(
                 po_id=None,
                 invoice=invoice,
                 po=None,
-                validation=None,
+                validation=validation,
             )
-            try:
-                from app.intelligence.knowledge_graph import (
-                    get_knowledge_graph,
-                    publish_vendor_context,
-                )
-
-                publish_vendor_context(
-                    get_knowledge_graph().get_vendor_context(invoice.vendor_name)
-                )
-            except Exception:  # noqa: BLE001
-                pass
             persist_pipeline_outcomes(
                 invoice=invoice,
                 po=None,
-                validation=None,
+                validation=validation,
                 settlement=None,
                 decision=decision,
             )
@@ -158,7 +187,7 @@ def run_pipeline_from_email(
                 "pipeline_complete",
                 "deterministic",
                 f"session_id={session_id}",
-                "short-circuit escalate - no PO; three-way match skipped",
+                "escalate - no PO; Neo4j check + three-way incomplete recorded",
                 action=decision.action,
                 payment_executed=False,
             )
@@ -168,8 +197,8 @@ def run_pipeline_from_email(
                 status=status,
                 po_id=None,
                 invoice=invoice,
-                validation=None,
-                anomaly=None,
+                validation=validation,
+                anomaly=anomaly,
                 settlement=None,
                 decision=decision,
                 payment_executed=False,

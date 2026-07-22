@@ -6,7 +6,7 @@ from app.agents import (
     run_negotiation,
     within_bounds,
 )
-from app.agents.bounds import outside_historical_range
+from app.agents.bounds import has_favorable_precedent, outside_historical_range
 from app.core import (
     CashOptimizationProposal,
     ExtractedInvoice,
@@ -25,6 +25,43 @@ from app.pipeline.validation import three_way_match
 from app.seed.mock_data import get_vendor_amounts, is_early_payment_eligible
 
 
+def _load_neo4j_vendor_context(vendor_name: str) -> dict:
+    """Always read vendor history from the knowledge graph (Neo4j / memory)."""
+    from app.intelligence.knowledge_graph import get_knowledge_graph, publish_vendor_context
+
+    ctx = get_knowledge_graph().get_vendor_context(vendor_name)
+    publish_vendor_context(ctx)
+    _audit(
+        "neo4j_vendor_check",
+        "deterministic",
+        f"vendor={vendor_name}",
+        (
+            f"source={ctx.get('source')} invoices={ctx.get('invoice_count', 0)} "
+            f"disputes={ctx.get('dispute_count', 0)} "
+            f"avg_invoice=${float(ctx.get('avg_invoice_amount') or 0):.2f} "
+            f"available={bool(ctx.get('available'))}"
+        ),
+        invoice_count=int(ctx.get("invoice_count") or 0),
+        dispute_count=int(ctx.get("dispute_count") or 0),
+        source=str(ctx.get("source") or ""),
+        available=bool(ctx.get("available")),
+    )
+    return ctx
+
+
+def _history_from_neo4j(vendor_context: dict, vendor_name: str) -> tuple[list[float], str]:
+    """Prefer Neo4j invoice amounts; fall back to seed history."""
+    amounts = [
+        float(a)
+        for a in (vendor_context.get("invoice_amounts") or [])
+        if a is not None
+    ]
+    if amounts:
+        return amounts, str(vendor_context.get("source") or "neo4j")
+    seed = get_vendor_amounts(vendor_name)
+    return list(seed), "seed_fallback"
+
+
 def _run_match_validate_enforce(
     *,
     invoice: ExtractedInvoice,
@@ -38,13 +75,20 @@ def _run_match_validate_enforce(
     bool,
     CashOptimizationProposal | None,
 ]:
-    """Shared path: three-way match → route → enforce → optional pay.
+    """Shared path: Neo4j → three-way → anomaly → route → enforce → optional pay."""
+    # 1. Always check Neo4j first.
+    try:
+        vendor_context = _load_neo4j_vendor_context(invoice.vendor_name)
+    except Exception as exc:  # noqa: BLE001
+        vendor_context = {}
+        _audit(
+            "neo4j_vendor_check",
+            "deterministic",
+            f"vendor={invoice.vendor_name}",
+            f"FAILED {type(exc).__name__}: {exc}",
+        )
 
-    Routing after validation:
-      - discrepancy           → dispute negotiation
-      - clean + discount-eligible → cash optimization negotiation
-      - clean + not eligible  → straight to enforcement
-    """
+    # 2. Always run three-way match when PO + GR exist.
     with _timer() as t:
         validation = three_way_match(invoice, po, receipt)
     _audit(
@@ -63,8 +107,13 @@ def _run_match_validate_enforce(
         discrepancy_amount=validation.discrepancy_amount,
     )
 
-    history = get_vendor_amounts(invoice.vendor_name)
-    anomaly = run_anomaly_checks(invoice, po, history)
+    history, history_source = _history_from_neo4j(vendor_context, invoice.vendor_name)
+    anomaly = run_anomaly_checks(
+        invoice,
+        po,
+        history,
+        history_source=history_source,
+    )
 
     # ML anomaly blocks negotiation/payment until human clears it.
     from app.human_loop.review_queue import anomaly_review_queue
@@ -142,16 +191,6 @@ def _run_match_validate_enforce(
             "human cleared anomaly - resuming negotiation / enforcement",
         )
 
-    # Publish vendor history for UI.
-    vendor_context: dict = {}
-    try:
-        from app.intelligence.knowledge_graph import get_knowledge_graph, publish_vendor_context
-
-        vendor_context = get_knowledge_graph().get_vendor_context(invoice.vendor_name)
-        publish_vendor_context(vendor_context)
-    except Exception:  # noqa: BLE001
-        vendor_context = {}
-
     cash_opt: CashOptimizationProposal | None = None
     eligible = is_early_payment_eligible(invoice.vendor_name)
 
@@ -161,14 +200,12 @@ def _run_match_validate_enforce(
         po_amount=po.agreed_amount,
         receipt_amount=receipt.received_amount,
     )
-    from app.agents.bounds import has_favorable_precedent
-
     favorable = has_favorable_precedent(
         vendor_context,
         invoice.invoice_amount,
         po_amount=po.agreed_amount,
     )
-    # Negotiate on discrepancy, or on true outliers with no favorable precedent.
+    # Negotiate on discrepancy, or outliers with no favorable Neo4j precedent.
     needs_negotiation = (not validation.matched) or (out_hist and not favorable)
     if hist_band is not None:
         _audit(
@@ -179,19 +216,17 @@ def _run_match_validate_enforce(
                 f"vendor_history_n={int(hist_band['n'])}"
             ),
             (
-                f"outside_history={out_hist} "
+                f"outside_history={out_hist} favorable={favorable} "
                 f"band=${float(hist_band['min']):.2f}-${float(hist_band['max']):.2f} "
                 f"(past agreed raw "
                 f"${float(hist_band['raw_min']):.2f}-${float(hist_band['raw_max']):.2f})"
             ),
             outside_history=out_hist,
+            favorable=favorable,
             hist_min=float(hist_band["min"]),
             hist_max=float(hist_band["max"]),
             hist_n=int(hist_band["n"]),
         )
-
-    # Negotiate when three-way fails OR amount is unlike past accepted settlements.
-    needs_negotiation = (not validation.matched) or out_hist
 
     if needs_negotiation:
         route = (

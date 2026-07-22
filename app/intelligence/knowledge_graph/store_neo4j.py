@@ -309,6 +309,7 @@ def query_neo4j(driver: Any, vendor_name: str) -> dict[str, Any]:
               count(DISTINCT d) AS dispute_count,
               avg(i.amount) AS avg_invoice_amount,
               avg(d.discrepancy_amount) AS avg_discrepancy,
+              collect(DISTINCT i.amount) AS invoice_amounts,
               collect(DISTINCT s) + collect(DISTINCT s2) AS settlements,
               max(i.updated_at) AS last_updated,
               v.last_updated AS vendor_last_updated
@@ -346,12 +347,18 @@ def query_neo4j(driver: Any, vendor_name: str) -> dict[str, Any]:
     avg_disc = row["avg_discrepancy"]
     avg_inv = row["avg_invoice_amount"]
     last_updated = row["last_updated"] or row["vendor_last_updated"]
+    invoice_amounts = [
+        float(a)
+        for a in (row["invoice_amounts"] or [])
+        if a is not None
+    ]
     return {
         "vendor_name": vendor_name,
         "invoice_count": int(row["invoice_count"] or 0),
         "dispute_count": int(row["dispute_count"] or 0),
         "avg_discrepancy": round(float(avg_disc or 0), 2),
         "avg_invoice_amount": round(float(avg_inv or 0), 2),
+        "invoice_amounts": invoice_amounts,
         "settlement_outcomes": {
             "agreed_count": agreed,
             "not_agreed_count": not_agreed,

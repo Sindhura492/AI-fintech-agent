@@ -52,6 +52,7 @@ def empty_vendor_context(vendor_name: str, *, source: str = "none") -> dict[str,
         "dispute_count": 0,
         "avg_discrepancy": 0.0,
         "avg_invoice_amount": 0.0,
+        "invoice_amounts": [],
         "settlement_outcomes": {
             "agreed_count": 0,
             "not_agreed_count": 0,

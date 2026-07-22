@@ -166,6 +166,7 @@ def query_memory(memory: _MemoryGraph, vendor_name: str) -> dict[str, Any]:
         "avg_invoice_amount": (
             round(sum(amounts) / len(amounts), 2) if amounts else 0.0
         ),
+        "invoice_amounts": amounts,
         "settlement_outcomes": {
             "agreed_count": agreed,
             "not_agreed_count": len(settlements) - agreed,

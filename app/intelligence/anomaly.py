@@ -85,13 +85,37 @@ class AnomalyDetector:
     def history_for(self, vendor_name: str) -> list[float]:
         return list(self._histories.get(vendor_name, []))
 
-    def check(self, invoice_amount: float, vendor_name: str) -> AnomalyResult:
-        """Score ``invoice_amount`` against the vendor's trained IsolationForest."""
+    def check(
+        self,
+        invoice_amount: float,
+        vendor_name: str,
+        *,
+        history: list[float] | None = None,
+    ) -> AnomalyResult:
+        """Score ``invoice_amount`` against vendor history (Neo4j preferred)."""
         logger.info(
             "[ML - ISOLATION FOREST] Scoring invoice against %s's history...",
             vendor_name,
         )
+        live_history = [float(x) for x in (history or []) if x is not None]
         model = self._models.get(vendor_name)
+        threshold = self._thresholds.get(vendor_name, 0.0)
+        hist_for_max = live_history or self._histories.get(vendor_name, [])
+
+        # Prefer live Neo4j history when enough points exist.
+        if len(live_history) >= 3:
+            X_hist = np.asarray(live_history, dtype=float).reshape(-1, 1)
+            cont = min(max(0.1, 1.0 / len(live_history)), 0.5)
+            model = IsolationForest(
+                n_estimators=100,
+                contamination=cont,
+                random_state=42,
+            )
+            model.fit(X_hist)
+            train_decisions = model.decision_function(X_hist)
+            threshold = float(np.percentile(train_decisions, 15))
+            hist_for_max = live_history
+
         if model is None:
             result = AnomalyResult(
                 is_anomaly=False,
@@ -109,9 +133,7 @@ class AnomalyDetector:
         X = np.asarray([[float(invoice_amount)]], dtype=float)
         decision = float(model.decision_function(X)[0])
         anomaly_score = round(-decision, 4)
-        threshold = self._thresholds.get(vendor_name, 0.0)
-        history = self._histories.get(vendor_name, [])
-        hist_max = max(history) if history else invoice_amount
+        hist_max = max(hist_for_max) if hist_for_max else invoice_amount
         pred_outlier = int(model.predict(X)[0]) == -1
         below_threshold = decision < threshold
         beyond_history = invoice_amount > hist_max * 1.08
@@ -123,12 +145,13 @@ class AnomalyDetector:
         )
         logger.info(
             "[ML - ISOLATION FOREST] Result: is_anomaly=%s score=%s "
-            "(pred_outlier=%s below_threshold=%s beyond_history=%s)",
+            "(pred_outlier=%s below_threshold=%s beyond_history=%s history_n=%d)",
             result.is_anomaly,
             result.anomaly_score,
             pred_outlier,
             below_threshold,
             beyond_history,
+            len(hist_for_max),
         )
         return result
 
