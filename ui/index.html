@@ -1,0 +1,1580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Finance — Live Negotiation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0b0d12;
+      --bg-elevated: #12151c;
+      --border: #252a35;
+      --text: #e8eaef;
+      --muted: #8b93a7;
+      --llm: #7c6cff;
+      --rule: #2dd4a8;
+      --ml: #f59e0b;
+      --supplier: #3b82f6;
+      --supplier-bg: rgba(59, 130, 246, 0.14);
+      --supplier-border: rgba(59, 130, 246, 0.4);
+      --buyer: #14b8a6;
+      --buyer-bg: rgba(20, 184, 166, 0.14);
+      --buyer-border: rgba(20, 184, 166, 0.4);
+      --approve: #22c55e;
+      --escalate: #eab308;
+      --deny: #ef4444;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Sora", sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(59, 130, 246, 0.12), transparent 55%),
+        radial-gradient(900px 500px at 90% 0%, rgba(20, 184, 166, 0.08), transparent 50%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .shell {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    header h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+    header p {
+      margin-top: 0.35rem;
+      color: var(--muted);
+      font-size: 0.875rem;
+      line-height: 1.45;
+      max-width: 36rem;
+    }
+
+    .header-meta {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.5rem;
+    }
+
+    .badge {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.7rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .badge.live {
+      color: var(--rule);
+      border-color: rgba(45, 212, 168, 0.35);
+      background: rgba(45, 212, 168, 0.08);
+    }
+
+    .inbox {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.45rem 0.75rem;
+      border-radius: 10px;
+      border: 1px solid rgba(234, 179, 8, 0.35);
+      background: rgba(234, 179, 8, 0.08);
+      font-size: 0.75rem;
+      color: #f5d67b;
+      max-width: 16rem;
+    }
+    .inbox .pulse {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #eab308;
+      animation: pulse 1.6s ease-out infinite;
+      flex-shrink: 0;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.55); }
+      70% { box-shadow: 0 0 0 8px rgba(234, 179, 8, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); }
+    }
+    .inbox strong { color: var(--text); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      padding: 1rem;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 1.5rem;
+    }
+
+    select {
+      flex: 1;
+      min-width: 220px;
+      appearance: none;
+      background: var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238b93a7' d='M1 1l5 5 5-5'/%3E%3C/svg%3E") right 0.9rem center no-repeat;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.7rem 2.2rem 0.7rem 0.9rem;
+      font-family: inherit;
+      font-size: 0.875rem;
+    }
+
+    button#run {
+      font-family: inherit;
+      font-size: 0.875rem;
+      font-weight: 600;
+      padding: 0.7rem 1.25rem;
+      border: none;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #3b82f6, #0d9488);
+      color: #fff;
+      cursor: pointer;
+    }
+    button#run:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ---- Chat ---- */
+    .chat-panel {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.1rem 1rem 1.25rem;
+      min-height: 280px;
+      margin-bottom: 1rem;
+    }
+
+    .chat-title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      padding: 0 0.35rem;
+    }
+
+    #chat {
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+      min-height: 160px;
+    }
+
+    .chat-empty {
+      color: var(--muted);
+      font-size: 0.875rem;
+      padding: 2rem 0.5rem;
+      text-align: center;
+    }
+
+    .row {
+      display: flex;
+      width: 100%;
+      animation: rise 0.3s ease-out;
+    }
+    .row.supplier { justify-content: flex-start; }
+    .row.buyer { justify-content: flex-end; }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .bubble {
+      max-width: min(78%, 420px);
+      border-radius: 14px;
+      padding: 0.75rem 0.9rem;
+      border: 1px solid;
+    }
+    .row.supplier .bubble {
+      background: var(--supplier-bg);
+      border-color: var(--supplier-border);
+      border-bottom-left-radius: 4px;
+    }
+    .row.buyer .bubble {
+      background: var(--buyer-bg);
+      border-color: var(--buyer-border);
+      border-bottom-right-radius: 4px;
+    }
+
+    .bubble-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.4rem;
+    }
+    .speaker {
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .row.supplier .speaker { color: #93c5fd; }
+    .row.buyer .speaker { color: #5eead4; }
+
+    .round-tag {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.1rem 0.45rem;
+    }
+
+    .bubble-text {
+      font-size: 0.84rem;
+      line-height: 1.45;
+      margin-bottom: 0.5rem;
+    }
+
+    .amount {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+    .row.supplier .amount { color: #bfdbfe; }
+    .row.buyer .amount { color: #99f6e4; }
+
+    .verified {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      margin-top: 0.45rem;
+      font-size: 0.68rem;
+      font-family: "IBM Plex Mono", monospace;
+      color: #86efac;
+      background: rgba(34, 197, 94, 0.12);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+      border-radius: 999px;
+      padding: 0.15rem 0.5rem;
+    }
+
+    /* typing indicator */
+    .typing {
+      display: flex;
+      gap: 4px;
+      padding: 0.85rem 1rem;
+      align-items: center;
+    }
+    .typing span {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--muted);
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+    .typing span:nth-child(2) { animation-delay: 0.15s; }
+    .typing span:nth-child(3) { animation-delay: 0.3s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40% { transform: translateY(-4px); opacity: 1; }
+    }
+    .row.supplier .typing { background: var(--supplier-bg); border: 1px solid var(--supplier-border); border-radius: 14px; }
+    .row.buyer .typing { background: var(--buyer-bg); border: 1px solid var(--buyer-border); border-radius: 14px; }
+
+    #settlement-banner {
+      display: none;
+      margin: 1rem 0 1.5rem;
+      border-radius: 12px;
+      padding: 1rem 1.25rem;
+      text-align: center;
+      border: 1px solid var(--border);
+      animation: rise 0.35s ease-out;
+    }
+    #settlement-banner.visible { display: block; }
+    #settlement-banner.ok {
+      background: rgba(34, 197, 94, 0.12);
+      border-color: rgba(34, 197, 94, 0.45);
+      color: #86efac;
+    }
+    #settlement-banner.bad {
+      background: rgba(234, 179, 8, 0.12);
+      border-color: rgba(234, 179, 8, 0.45);
+      color: #fde68a;
+    }
+    #settlement-banner .title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    #settlement-banner .sub {
+      margin-top: 0.25rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.8rem;
+      opacity: 0.9;
+    }
+
+    #gate {
+      display: none;
+      border-radius: 14px;
+      padding: 1.2rem 1.4rem;
+      border: 1px solid var(--border);
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+    #gate.visible { display: block; }
+    #gate.approve { background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.5); }
+    #gate.escalate { background: rgba(234, 179, 8, 0.12); border-color: rgba(234, 179, 8, 0.5); }
+    #gate.deny { background: rgba(239, 68, 68, 0.12); border-color: rgba(239, 68, 68, 0.5); }
+    #gate .verdict { font-size: 1.6rem; font-weight: 700; letter-spacing: 0.08em; }
+    #gate.approve .verdict { color: var(--approve); }
+    #gate.escalate .verdict { color: var(--escalate); }
+    #gate.deny .verdict { color: var(--deny); }
+    #gate .rule {
+      margin-top: 0.45rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+    #gate .rule strong { color: var(--text); font-weight: 500; }
+    #gate .reason { margin-top: 0.3rem; font-size: 0.85rem; color: var(--muted); }
+
+    /* human review queue (escalations + ML anomalies) */
+    #review-queue {
+      display: none;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+    #review-queue.visible { display: flex; }
+    #review-queue .rq-heading {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+    .review-card {
+      border-radius: 14px;
+      padding: 1.05rem 1.15rem;
+      border: 1px solid var(--border);
+      animation: rise 0.35s ease-out;
+    }
+    .review-card.escalation {
+      border-color: rgba(234, 179, 8, 0.45);
+      background: linear-gradient(135deg, rgba(234, 179, 8, 0.1), rgba(239, 68, 68, 0.06));
+    }
+    .review-card.anomaly {
+      border-color: rgba(245, 158, 11, 0.5);
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(124, 108, 255, 0.06));
+    }
+    .review-card.resolved-approve {
+      border-color: rgba(34, 197, 94, 0.45);
+      background: rgba(34, 197, 94, 0.1);
+    }
+    .review-card.resolved-deny {
+      border-color: rgba(239, 68, 68, 0.45);
+      background: rgba(239, 68, 68, 0.1);
+    }
+    .review-card .rc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.45rem;
+    }
+    .review-card .rc-title {
+      font-size: 0.92rem;
+      font-weight: 700;
+      color: #fde68a;
+    }
+    .review-card.anomaly .rc-title { color: #fcd34d; }
+    .review-card.resolved-approve .rc-title { color: #86efac; }
+    .review-card.resolved-deny .rc-title { color: #fca5a5; }
+    .review-card .rc-kind {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.15rem 0.5rem;
+      color: var(--muted);
+    }
+    .review-card .rc-details {
+      font-size: 0.84rem;
+      color: var(--text);
+      line-height: 1.5;
+      margin-bottom: 0.85rem;
+    }
+    .review-card .rc-details .meta {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .review-card .rc-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+    }
+    .review-card button {
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.55rem 1rem;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .review-card button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .review-card .btn-approve {
+      background: rgba(34, 197, 94, 0.18);
+      border-color: rgba(34, 197, 94, 0.5);
+      color: #86efac;
+    }
+    .review-card .btn-deny {
+      background: rgba(239, 68, 68, 0.18);
+      border-color: rgba(239, 68, 68, 0.5);
+      color: #fca5a5;
+    }
+    .review-card .rc-status {
+      margin-top: 0.55rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: none;
+    }
+    .review-card .rc-status.visible { display: block; }
+
+    /* collapsible technical trace */
+    details.trace-panel {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(18, 21, 28, 0.7);
+      padding: 0.75rem 1rem;
+    }
+    details.trace-panel > summary {
+      cursor: pointer;
+      list-style: none;
+      font-size: 0.8rem;
+      color: var(--muted);
+      font-weight: 500;
+      user-select: none;
+    }
+    details.trace-panel > summary::-webkit-details-marker { display: none; }
+    details.trace-panel > summary::before {
+      content: "▸ ";
+      color: var(--llm);
+    }
+    details.trace-panel[open] > summary::before { content: "▾ "; }
+    details.trace-panel[open] > summary { margin-bottom: 0.75rem; }
+
+    #timeline { padding-left: 1.25rem; position: relative; }
+    #timeline::before {
+      content: "";
+      position: absolute;
+      left: 4px; top: 0.2rem; bottom: 0.2rem;
+      width: 2px;
+      background: var(--border);
+    }
+    .step { position: relative; margin-bottom: 0.65rem; }
+    .step::before {
+      content: "";
+      position: absolute;
+      left: -1.25rem; top: 0.95rem;
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--bg);
+      border: 2px solid var(--border);
+    }
+    .step.llm::before { border-color: var(--llm); background: var(--llm); }
+    .step.deterministic::before { border-color: var(--rule); background: var(--rule); }
+    .step.ml::before { border-color: var(--ml); background: var(--ml); }
+    .card {
+      border-radius: 8px;
+      padding: 0.65rem 0.8rem;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 0.75rem;
+    }
+    .step.llm .card { border-color: rgba(124, 108, 255, 0.35); }
+    .step.deterministic .card { border-color: rgba(45, 212, 168, 0.3); }
+    .step.ml .card { border-color: rgba(245, 158, 11, 0.4); }
+    .card-head { display: flex; justify-content: space-between; margin-bottom: 0.35rem; }
+    .tag { font-weight: 600; font-size: 0.7rem; }
+    .step.llm .tag { color: #b4a9ff; }
+    .step.deterministic .tag { color: #7eebd0; }
+    .step.ml .tag { color: #fcd34d; }
+    .step-name { font-family: "IBM Plex Mono", monospace; font-size: 0.65rem; color: var(--muted); }
+    .io dt {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    .io dd { margin-bottom: 0.25rem; color: var(--text); word-break: break-word; }
+
+    /* vendor knowledge graph context */
+    #vendor-context {
+      display: none;
+      margin-bottom: 1rem;
+      border-radius: 14px;
+      padding: 1rem 1.15rem;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      background:
+        linear-gradient(135deg, rgba(56, 189, 248, 0.08), rgba(124, 108, 255, 0.06));
+      animation: rise 0.3s ease-out;
+    }
+    #vendor-context.visible { display: block; }
+    #vendor-context .vc-title {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #7dd3fc;
+      margin-bottom: 0.55rem;
+    }
+    #vendor-context .vc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 0.55rem 1rem;
+      font-size: 0.8rem;
+    }
+    #vendor-context .vc-grid dt {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.62rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+    #vendor-context .vc-grid dd { color: var(--text); margin-top: 0.1rem; }
+    #vendor-context .vc-source {
+      margin-top: 0.65rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+
+    /* ---- Tabs ---- */
+    .tabs {
+      display: flex;
+      gap: 0.35rem;
+      margin-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.35rem;
+    }
+    .tab-btn {
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 600;
+      padding: 0.55rem 1rem;
+      border: 1px solid transparent;
+      border-radius: 8px 8px 0 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .tab-btn.active {
+      color: var(--text);
+      background: var(--bg-elevated);
+      border-color: var(--border);
+      border-bottom-color: var(--bg-elevated);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ---- Monitoring ---- */
+    .mon-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.25rem;
+    }
+    .mon-stat {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.9rem 1rem;
+    }
+    .mon-stat .label {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+    .mon-stat .value {
+      margin-top: 0.35rem;
+      font-size: 1.35rem;
+      font-weight: 700;
+    }
+    .mon-charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+    @media (max-width: 720px) {
+      .mon-charts { grid-template-columns: 1fr; }
+    }
+    .mon-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+    }
+    .mon-card h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+      margin-bottom: 0.75rem;
+    }
+    .mon-card canvas { max-height: 220px; }
+    .health-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-bottom: 1.25rem;
+    }
+    .health-pill {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      background: var(--border);
+    }
+    .health-pill.ok { background: var(--approve); }
+    .health-pill.bad { background: var(--deny); }
+    .health-pill.warn { background: var(--escalate); }
+    .mon-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg-elevated);
+    }
+    table.mon-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.78rem;
+    }
+    table.mon-table th,
+    table.mon-table td {
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    table.mon-table th {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    table.mon-table tr:last-child td { border-bottom: none; }
+    .outcome-pill {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.68rem;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+    }
+    .outcome-pill.approved { color: #86efac; border-color: rgba(34,197,94,0.4); }
+    .outcome-pill.denied { color: #fca5a5; border-color: rgba(239,68,68,0.4); }
+    .outcome-pill.escalated { color: #fde68a; border-color: rgba(234,179,8,0.4); }
+    .outcome-pill.failed { color: #fca5a5; border-color: rgba(239,68,68,0.4); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <h1>Agent Finance</h1>
+        <p>Watch buyer and supplier agents negotiate live — with deterministic verification on every buyer turn.</p>
+      </div>
+      <div class="header-meta">
+        <span id="ws-status" class="badge">Connecting…</span>
+        <div class="inbox" id="inbox" title="Gmail IMAP poller">
+          <span class="pulse" aria-hidden="true"></span>
+          <div>
+            <div>📧 Inbox — listening for new invoices…</div>
+            <div>Processed this session: <strong id="inbox-count">0</strong></div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab-btn active" data-tab="live" role="tab">⚡ Live Pipeline</button>
+      <button type="button" class="tab-btn" data-tab="monitoring" role="tab">📊 Monitoring</button>
+    </div>
+
+    <div id="tab-live" class="tab-panel active">
+    <div class="controls">
+      <select id="sample" aria-label="Sample invoice">
+        <option value="po1001">PO-1001 — Clean match + early-pay discount</option>
+        <option value="po1002">PO-1002 — Small mismatch ~2%</option>
+        <option value="po1003">PO-1003 — Large mismatch ~18%</option>
+      </select>
+      <button id="run" type="button">Run Pipeline</button>
+    </div>
+
+    <div id="vendor-context" aria-live="polite">
+      <div class="vc-title">📊 Vendor Context (from Knowledge Graph)</div>
+      <dl class="vc-grid" id="vc-grid"></dl>
+      <div class="vc-source" id="vc-source"></div>
+    </div>
+
+    <section class="chat-panel" aria-label="Agent negotiation">
+      <div class="chat-title">Agent negotiation</div>
+      <div id="chat">
+        <div class="chat-empty" id="chat-empty">Run a pipeline to watch the supplier ↔ buyer conversation.</div>
+      </div>
+    </section>
+
+    <div id="settlement-banner" aria-live="polite">
+      <div class="title" id="banner-title"></div>
+      <div class="sub" id="banner-sub"></div>
+    </div>
+
+    <div id="gate" aria-live="polite">
+      <div class="verdict" id="gate-verdict"></div>
+      <div class="rule">rule_fired: <strong id="gate-rule"></strong></div>
+      <div class="reason" id="gate-reason"></div>
+    </div>
+
+    <div id="review-queue" aria-live="polite">
+      <div class="rq-heading">Human review queue</div>
+      <div id="review-cards"></div>
+    </div>
+
+    <details class="trace-panel">
+      <summary>Technical pipeline trace (LLM vs rule-engine steps)</summary>
+      <div id="timeline"></div>
+    </details>
+    </div><!-- /tab-live -->
+
+    <div id="tab-monitoring" class="tab-panel">
+      <div class="mon-grid">
+        <div class="mon-stat"><div class="label">Total runs</div><div class="value" id="m-total">0</div></div>
+        <div class="mon-stat"><div class="label">Escalation rate</div><div class="value" id="m-esc">0%</div></div>
+        <div class="mon-stat"><div class="label">Anomaly flag rate</div><div class="value" id="m-anom">0%</div></div>
+        <div class="mon-stat"><div class="label">LLM calls</div><div class="value" id="m-llm">0</div></div>
+      </div>
+
+      <div class="mon-card" style="margin-bottom:1.25rem">
+        <h3>Health check — last N runs</h3>
+        <div class="health-row" id="health-row" aria-label="Recent run health"></div>
+        <div style="font-size:0.75rem;color:var(--muted)">Green = success · Yellow = escalated · Red = failed/denied</div>
+      </div>
+
+      <div class="mon-charts">
+        <div class="mon-card">
+          <h3>Step count by type</h3>
+          <canvas id="chart-steps"></canvas>
+        </div>
+        <div class="mon-card">
+          <h3>Escalation & anomaly rates (recent)</h3>
+          <canvas id="chart-rates"></canvas>
+        </div>
+      </div>
+
+      <div class="mon-card" style="margin-bottom:1.25rem">
+        <h3>Average latency per step type (ms)</h3>
+        <canvas id="chart-latency" height="100"></canvas>
+      </div>
+
+      <div class="mon-card">
+        <h3>Run log</h3>
+        <div class="mon-table-wrap">
+          <table class="mon-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Vendor</th>
+                <th>Amount</th>
+                <th>Outcome</th>
+                <th>Session</th>
+              </tr>
+            </thead>
+            <tbody id="mon-runs-body">
+              <tr><td colspan="5" style="color:var(--muted)">No runs yet — execute a pipeline to populate metrics.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /tab-monitoring -->
+  </div>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const chatEmpty = document.getElementById("chat-empty");
+    const timeline = document.getElementById("timeline");
+    const runBtn = document.getElementById("run");
+    const sampleSelect = document.getElementById("sample");
+    const wsStatus = document.getElementById("ws-status");
+    const gate = document.getElementById("gate");
+    const gateVerdict = document.getElementById("gate-verdict");
+    const gateRule = document.getElementById("gate-rule");
+    const gateReason = document.getElementById("gate-reason");
+    const banner = document.getElementById("settlement-banner");
+    const bannerTitle = document.getElementById("banner-title");
+    const bannerSub = document.getElementById("banner-sub");
+    const inboxCount = document.getElementById("inbox-count");
+    const reviewQueue = document.getElementById("review-queue");
+    const reviewCards = document.getElementById("review-cards");
+    const vendorContext = document.getElementById("vendor-context");
+    const vcGrid = document.getElementById("vc-grid");
+    const vcSource = document.getElementById("vc-source");
+
+    const SAMPLE_VENDORS = {
+      po1001: "Meridian Office Supply",
+      po1002: "Cascade Industrial Parts",
+      po1003: "Northwind Components",
+    };
+    let ws = null;
+    let activeSession = null;
+    let running = false;
+    let lastInboxSession = null;
+    let emailsProcessed = 0;
+    const typingRows = { supplier: null, buyer: null };
+
+    function setWsStatus(text, live) {
+      wsStatus.textContent = text;
+      wsStatus.classList.toggle("live", !!live);
+    }
+
+    function formatMoney(n) {
+      if (n == null || Number.isNaN(Number(n))) return "—";
+      return `$${Number(n).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    }
+
+    function clearReviewQueue() {
+      reviewCards.innerHTML = "";
+      reviewQueue.classList.remove("visible");
+    }
+
+    function hideVendorContext() {
+      vendorContext.classList.remove("visible");
+      vcGrid.innerHTML = "";
+      vcSource.textContent = "";
+    }
+
+    function showVendorContext(ctx) {
+      if (!ctx || !ctx.vendor_name) return;
+      const outcomes = ctx.settlement_outcomes || {};
+      const avgSettle = outcomes.avg_settlement_amount != null
+        ? formatMoney(outcomes.avg_settlement_amount)
+        : "—";
+      const recent = (outcomes.recent || [])
+        .map((r) => `${formatMoney(r.final_amount)}${r.agreed_by_both ? "✓" : "✗"}`)
+        .join(", ") || "—";
+      vcGrid.innerHTML = `
+        <div><dt>Vendor</dt><dd>${escapeHtml(ctx.vendor_name)}</dd></div>
+        <div><dt>Past invoices</dt><dd>${escapeHtml(String(ctx.invoice_count ?? 0))}</dd></div>
+        <div><dt>Past disputes</dt><dd>${escapeHtml(String(ctx.dispute_count ?? 0))}</dd></div>
+        <div><dt>Avg discrepancy</dt><dd>${escapeHtml(formatMoney(ctx.avg_discrepancy))}</dd></div>
+        <div><dt>Settlements agreed / not</dt>
+          <dd>${escapeHtml(String(outcomes.agreed_count ?? 0))} / ${escapeHtml(String(outcomes.not_agreed_count ?? 0))}</dd></div>
+        <div><dt>Avg settlement</dt><dd>${escapeHtml(avgSettle)}</dd></div>
+        <div><dt>Recent outcomes</dt><dd>${escapeHtml(recent)}</dd></div>
+      `;
+      vcSource.textContent =
+        `source=${ctx.source || "graph"} · agents use this before proposing`;
+      vendorContext.classList.add("visible");
+    }
+
+    async function prefetchVendorContext(sampleId) {
+      const vendor = SAMPLE_VENDORS[sampleId];
+      if (!vendor) return;
+      try {
+        const res = await fetch(`/vendor-graph/${encodeURIComponent(vendor)}`);
+        if (!res.ok) return;
+        showVendorContext(await res.json());
+      } catch { /* optional */ }
+    }
+    function ensureReviewQueueVisible() {
+      reviewQueue.classList.add("visible");
+    }
+
+    function cardId(kind, sessionId) {
+      return `review-${kind}-${sessionId}`;
+    }
+
+    function upsertReviewCard(data) {
+      const kind = data.kind === "anomaly" ? "anomaly" : "escalation";
+      const sid = data.session_id || activeSession || "unknown";
+      const id = cardId(kind, sid);
+      ensureReviewQueueVisible();
+
+      let card = document.getElementById(id);
+      if (!card) {
+        card = document.createElement("div");
+        card.id = id;
+        card.dataset.kind = kind;
+        card.dataset.sessionId = sid;
+        reviewCards.appendChild(card);
+      }
+
+      const pending =
+        data.status === "pending" ||
+        data.status === "pending_review" ||
+        (!data.status && !data.action && !data.resolved_action);
+
+      if (!pending) {
+        markReviewResolved(card, data);
+        return;
+      }
+
+      card.className = `review-card ${kind}`;
+      const title = kind === "anomaly"
+        ? "🔬 Anomaly flagged — review needed"
+        : "⚠️ Escalation — approval needed";
+      const kindLabel = kind === "anomaly" ? "ML anomaly" : "Gate escalate";
+      let bodyMeta = "";
+      if (kind === "anomaly") {
+        bodyMeta =
+          `<div class="meta">score=${escapeHtml(String(data.anomaly_score ?? "—"))}` +
+          ` · ${escapeHtml(data.method || "isolation_forest")}</div>` +
+          `<div style="margin-top:0.35rem">${escapeHtml(data.explanation || "")}</div>`;
+      } else {
+        const reason = data.display_reason || data.reason || "escalated";
+        bodyMeta =
+          `<div class="meta">${escapeHtml(reason)}` +
+          (data.rule_fired ? ` · ${escapeHtml(data.rule_fired)}` : "") +
+          `</div>`;
+      }
+
+      card.innerHTML = `
+        <div class="rc-head">
+          <div class="rc-title">${title}</div>
+          <span class="rc-kind">${kindLabel}</span>
+        </div>
+        <div class="rc-details">
+          <strong>${escapeHtml(data.vendor_name || "Unknown vendor")}</strong>
+          · ${escapeHtml(formatMoney(data.amount))}
+          ${bodyMeta}
+        </div>
+        <div class="rc-actions">
+          <button type="button" class="btn-approve">✅ Approve</button>
+          <button type="button" class="btn-deny">❌ Deny</button>
+        </div>
+        <div class="rc-status"></div>`;
+
+      const approveBtn = card.querySelector(".btn-approve");
+      const denyBtn = card.querySelector(".btn-deny");
+      approveBtn.addEventListener("click", () => resolveReview(kind, sid, "approve", card));
+      denyBtn.addEventListener("click", () => resolveReview(kind, sid, "deny", card));
+      card.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function markReviewResolved(card, data) {
+      const kind = card.dataset.kind || data.kind || "escalation";
+      const action = (data.action || data.resolved_action || "").toLowerCase();
+      const approved =
+        action === "approve" ||
+        data.status === "approved";
+      card.className = `review-card ${kind} ${approved ? "resolved-approve" : "resolved-deny"}`;
+
+      const title = kind === "anomaly"
+        ? (approved ? "✅ Anomaly cleared by human" : "❌ Anomaly confirmed by human")
+        : (approved ? "✅ Escalation approved by human" : "❌ Escalation denied by human");
+
+      let detailExtra = "";
+      if (kind === "anomaly") {
+        detailExtra = `<div style="margin-top:0.35rem">${escapeHtml(data.explanation || "")}</div>`;
+      } else {
+        const reason = data.display_reason || data.reason || "";
+        detailExtra = reason
+          ? `<div class="meta">${escapeHtml(reason)}</div>`
+          : "";
+      }
+
+      let statusText = "";
+      if (kind === "anomaly") {
+        statusText = approved
+          ? "Marked as reviewed / false positive — pipeline decision unchanged."
+          : "Confirmed as a real anomaly concern.";
+      } else {
+        statusText = approved
+          ? (data.payment_executed
+              ? "Payment executed after human approval."
+              : "Approved — no payment (no settlement on file).")
+          : "Payment blocked — human denied.";
+      }
+
+      card.innerHTML = `
+        <div class="rc-head">
+          <div class="rc-title">${title}</div>
+          <span class="rc-kind">${kind === "anomaly" ? "ML anomaly" : "Gate escalate"}</span>
+        </div>
+        <div class="rc-details">
+          <strong>${escapeHtml(data.vendor_name || "Unknown vendor")}</strong>
+          · ${escapeHtml(formatMoney(data.amount))}
+          ${detailExtra}
+        </div>
+        <div class="rc-status visible">${escapeHtml(statusText)}</div>`;
+
+      if (kind === "escalation") {
+        showGate(
+          {
+            action: approved ? "approve" : "deny",
+            rule_fired: data.rule_fired || (approved ? "HUMAN_APPROVE" : "HUMAN_DENY"),
+            reason: approved ? "human approval after escalation" : "human denial",
+          },
+          approved ? "Human approved after escalation" : "Human denied after escalation"
+        );
+      }
+    }
+
+    async function resolveReview(kind, sessionId, action, card) {
+      const buttons = card.querySelectorAll("button");
+      buttons.forEach((b) => { b.disabled = true; });
+      const statusEl = card.querySelector(".rc-status");
+      if (statusEl) {
+        statusEl.classList.add("visible");
+        statusEl.textContent = action === "approve" ? "Approving…" : "Denying…";
+      }
+      const path = kind === "anomaly"
+        ? `/anomaly/${action}/${sessionId}`
+        : `/${action}/${sessionId}`;
+      try {
+        const res = await fetch(path, { method: "POST" });
+        if (!res.ok) throw new Error(await res.text() || res.statusText);
+        const data = await res.json();
+        markReviewResolved(card, { ...data, kind });
+      } catch (err) {
+        buttons.forEach((b) => { b.disabled = false; });
+        if (statusEl) statusEl.textContent = String(err);
+      }
+    }
+
+    function clearUI() {
+      chat.innerHTML = "";
+      chat.appendChild(Object.assign(document.createElement("div"), {
+        className: "chat-empty",
+        id: "chat-empty",
+        textContent: "Waiting for agent messages…",
+      }));
+      timeline.innerHTML = "";
+      banner.className = "";
+      banner.classList.remove("visible");
+      gate.className = "";
+      gate.classList.remove("visible");
+      clearReviewQueue();
+      hideVendorContext();
+      typingRows.supplier = null;
+      typingRows.buyer = null;
+    }
+
+    function ensureChatReady() {
+      const empty = document.getElementById("chat-empty");
+      if (empty) empty.remove();
+    }
+
+    function showTyping(speaker) {
+      ensureChatReady();
+      clearTyping(speaker);
+      const row = document.createElement("div");
+      row.className = `row ${speaker}`;
+      row.dataset.typing = speaker;
+      row.innerHTML = `
+        <div class="typing" aria-label="${speaker} thinking">
+          <span></span><span></span><span></span>
+        </div>`;
+      chat.appendChild(row);
+      typingRows[speaker] = row;
+      row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function clearTyping(speaker) {
+      const row = typingRows[speaker];
+      if (row && row.parentNode) row.remove();
+      typingRows[speaker] = null;
+      // also clear any leftover
+      chat.querySelectorAll(`[data-typing="${speaker}"]`).forEach((el) => el.remove());
+    }
+
+    function appendBubble(msg) {
+      ensureChatReady();
+      const speaker = msg.speaker === "buyer" ? "buyer" : "supplier";
+      clearTyping(speaker);
+
+      const label = speaker === "buyer" ? "🏢 Buyer Agent" : "🏢 Supplier Agent";
+      const amount = msg.amount != null
+        ? `$${Number(msg.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : "—";
+      const verified = msg.verified
+        ? `<div class="verified">✓ Verified against source data</div>`
+        : "";
+
+      const row = document.createElement("div");
+      row.className = `row ${speaker}`;
+      row.innerHTML = `
+        <div class="bubble">
+          <div class="bubble-head">
+            <span class="speaker">${label}</span>
+            <span class="round-tag">round ${msg.round_number ?? "—"}</span>
+          </div>
+          <div class="bubble-text">${escapeHtml(msg.text || "")}</div>
+          <div class="amount">${amount}</div>
+          ${verified}
+        </div>`;
+      chat.appendChild(row);
+      row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+
+    function showSettlementBanner(data) {
+      banner.classList.add("visible");
+      if (data.converged) {
+        banner.className = "ok visible";
+        bannerTitle.textContent = "🤝 Settlement Reached";
+        const amt = data.amount != null
+          ? `$${Number(data.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          : "";
+        bannerSub.textContent = amt ? `Agreed amount ${amt}` : "Both sides aligned";
+      } else {
+        banner.className = "bad visible";
+        bannerTitle.textContent = "⏱️ No Convergence — Escalated";
+        bannerSub.textContent = "Handing off to enforcement / human review";
+      }
+    }
+
+    function appendStep(entry) {
+      let stepType = "deterministic";
+      let tag = "⚙️ Rule Engine";
+      if (entry.step_type === "llm") {
+        stepType = "llm";
+        tag = "🧠 LLM";
+      } else if (entry.step_type === "ml") {
+        stepType = "ml";
+        tag = "🔬 ML Model";
+      }
+      const dur = entry.duration_ms != null
+        ? `<span class="round-tag">${Number(entry.duration_ms).toFixed(0)} ms</span>`
+        : "";
+      const step = document.createElement("article");
+      step.className = `step ${stepType}`;
+      step.innerHTML = `
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">${tag}</span>
+            <span class="step-name">${escapeHtml(entry.step_name || "step")} ${dur}</span>
+          </div>
+          <dl class="io">
+            <div><dt>Input</dt><dd>${escapeHtml(entry.input_summary || "—")}</dd></div>
+            <div><dt>Output</dt><dd>${escapeHtml(entry.output_summary || "—")}</dd></div>
+          </dl>
+        </div>`;
+      timeline.appendChild(step);
+
+      if (entry.step_name === "enforce" || entry.step_name === "gate_decision") {
+        showGate(entry.details || {}, entry.output_summary);
+      }
+    }
+
+    function showGate(details, fallbackReason) {
+      const action = (details.action || "").toLowerCase();
+      let cls = "escalate", label = "ESCALATED";
+      if (action === "approve") { cls = "approve"; label = "APPROVED"; }
+      else if (action === "deny") { cls = "deny"; label = "DENIED"; }
+      gate.className = cls + " visible";
+      gateVerdict.textContent = label;
+      gateRule.textContent = details.rule_fired || "—";
+      gateReason.textContent = fallbackReason || details.reason || "";
+    }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function handleEvent(data) {
+      if (data.type === "subscribed") {
+        setWsStatus(`Live · ${String(data.session_id).slice(0, 8)}…`, true);
+        return;
+      }
+      if (data.type === "error") {
+        setWsStatus(data.message || "WS error", false);
+        return;
+      }
+      if (data.type === "vendor_context") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        showVendorContext(data);
+        return;
+      }
+      if (data.type === "agent_thinking") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        showTyping(data.speaker === "buyer" ? "buyer" : "supplier");
+        return;
+      }
+      if (data.type === "agent_message") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        appendBubble(data);
+        return;
+      }
+      if (data.type === "settlement_banner") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        clearTyping("supplier");
+        clearTyping("buyer");
+        showSettlementBanner(data);
+        return;
+      }
+      if (data.type === "escalation_pending") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        upsertReviewCard({ ...data, kind: "escalation", status: "pending" });
+        return;
+      }
+      if (data.type === "escalation_resolved") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        upsertReviewCard({ ...data, kind: "escalation" });
+        return;
+      }
+      if (data.type === "anomaly_pending") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        upsertReviewCard({ ...data, kind: "anomaly", status: "pending_review" });
+        return;
+      }
+      if (data.type === "anomaly_resolved") {
+        if (activeSession && data.session_id && data.session_id !== activeSession) return;
+        upsertReviewCard({ ...data, kind: "anomaly" });
+        return;
+      }
+      if (data.type === "audit") {
+        if (activeSession && data.details && data.details.session_id
+            && data.details.session_id !== activeSession) {
+          return;
+        }
+        appendStep(data);
+        if (data.step_name === "escalation_pending") {
+          upsertReviewCard({
+            kind: "escalation",
+            session_id: data.details?.session_id || activeSession,
+            vendor_name: data.details?.vendor_name,
+            amount: data.details?.amount,
+            reason: data.details?.reason,
+            rule_fired: data.details?.rule_fired,
+            status: "pending",
+          });
+        }
+        if (data.step_name === "human_decision") {
+          upsertReviewCard({
+            kind: "escalation",
+            session_id: data.details?.session_id || activeSession,
+            action: data.details?.action,
+            status: data.details?.status,
+            vendor_name: data.details?.vendor_name,
+            amount: data.details?.amount,
+            reason: data.details?.reason,
+            rule_fired: data.details?.rule_fired,
+            payment_executed: data.details?.payment_executed,
+          });
+        }
+        if (data.step_name === "anomaly_review_queued") {
+          upsertReviewCard({
+            kind: "anomaly",
+            session_id: data.details?.session_id || activeSession,
+            vendor_name: data.details?.vendor_name,
+            amount: data.details?.amount,
+            anomaly_score: data.details?.anomaly_score,
+            method: data.details?.method,
+            explanation: data.details?.explanation || data.output_summary,
+            status: "pending_review",
+          });
+        }
+        if (data.step_name === "anomaly_human_decision") {
+          upsertReviewCard({
+            kind: "anomaly",
+            session_id: data.details?.session_id || activeSession,
+            action: data.details?.action,
+            status: data.details?.status,
+            vendor_name: data.details?.vendor_name,
+            amount: data.details?.amount,
+            anomaly_score: data.details?.anomaly_score,
+          });
+        }
+        if (data.step_name === "pipeline_complete" || data.step_name === "pipeline_error") {
+          running = false;
+          runBtn.disabled = false;
+          runBtn.textContent = "Run Pipeline";
+          clearTyping("supplier");
+          clearTyping("buyer");
+          refreshMetrics();
+        }
+      }
+    }
+
+    /* ---- Monitoring tab ---- */
+    let chartSteps = null;
+    let chartRates = null;
+    let chartLatency = null;
+
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.dataset.tab;
+        document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".tab-panel").forEach((p) => {
+          p.classList.toggle("active", p.id === `tab-${tab}`);
+        });
+        if (tab === "monitoring") refreshMetrics();
+      });
+    });
+
+    function pct(n) {
+      return `${(Number(n || 0) * 100).toFixed(1)}%`;
+    }
+
+    function destroyChart(c) {
+      if (c) c.destroy();
+    }
+
+    async function refreshMetrics() {
+      try {
+        const res = await fetch("/metrics");
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById("m-total").textContent = String(data.total_runs ?? 0);
+        document.getElementById("m-esc").textContent = pct(data.escalation_rate);
+        document.getElementById("m-anom").textContent = pct(data.anomaly_flag_rate);
+        document.getElementById("m-llm").textContent = String(data.total_llm_calls ?? 0);
+
+        const health = document.getElementById("health-row");
+        health.innerHTML = "";
+        const items = data.health || [];
+        if (!items.length) {
+          health.innerHTML = `<span style="color:var(--muted);font-size:0.8rem">No runs recorded yet.</span>`;
+        } else {
+          for (const h of items) {
+            const pill = document.createElement("span");
+            pill.className = "health-pill";
+            if (!h.success || h.outcome === "failed" || h.outcome === "denied") pill.classList.add("bad");
+            else if (h.outcome === "escalated") pill.classList.add("warn");
+            else pill.classList.add("ok");
+            pill.title = `${h.outcome} · ${h.session_id}`;
+            health.appendChild(pill);
+          }
+        }
+
+        const counts = data.step_counts_by_type || {};
+        destroyChart(chartSteps);
+        chartSteps = new Chart(document.getElementById("chart-steps"), {
+          type: "bar",
+          data: {
+            labels: ["LLM", "Deterministic", "ML"],
+            datasets: [{
+              label: "Steps",
+              data: [counts.llm || 0, counts.deterministic || 0, counts.ml || 0],
+              backgroundColor: ["#7c6cff", "#2dd4a8", "#f59e0b"],
+              borderRadius: 6,
+            }],
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: "#8b93a7" }, grid: { color: "#252a35" } },
+              y: { beginAtZero: true, ticks: { color: "#8b93a7" }, grid: { color: "#252a35" } },
+            },
+          },
+        });
+
+        const series = data.rate_series || {};
+        destroyChart(chartRates);
+        chartRates = new Chart(document.getElementById("chart-rates"), {
+          type: "line",
+          data: {
+            labels: series.labels || [],
+            datasets: [
+              {
+                label: "Escalation rate",
+                data: series.escalation_rate || [],
+                borderColor: "#eab308",
+                backgroundColor: "rgba(234,179,8,0.15)",
+                tension: 0.3,
+                fill: true,
+              },
+              {
+                label: "Anomaly flag rate",
+                data: series.anomaly_flag_rate || [],
+                borderColor: "#f59e0b",
+                backgroundColor: "rgba(245,158,11,0.1)",
+                tension: 0.3,
+                fill: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { labels: { color: "#8b93a7" } } },
+            scales: {
+              x: { ticks: { color: "#8b93a7", maxRotation: 0 }, grid: { color: "#252a35" } },
+              y: {
+                beginAtZero: true,
+                max: 1,
+                ticks: { color: "#8b93a7", callback: (v) => `${(v * 100).toFixed(0)}%` },
+                grid: { color: "#252a35" },
+              },
+            },
+          },
+        });
+
+        const lat = data.avg_latency_per_step_type_ms || {};
+        destroyChart(chartLatency);
+        chartLatency = new Chart(document.getElementById("chart-latency"), {
+          type: "bar",
+          data: {
+            labels: ["LLM", "Deterministic", "ML"],
+            datasets: [{
+              label: "Avg ms",
+              data: [lat.llm || 0, lat.deterministic || 0, lat.ml || 0],
+              backgroundColor: ["rgba(124,108,255,0.7)", "rgba(45,212,168,0.7)", "rgba(245,158,11,0.7)"],
+              borderRadius: 6,
+            }],
+          },
+          options: {
+            indexAxis: "y",
+            responsive: true,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { beginAtZero: true, ticks: { color: "#8b93a7" }, grid: { color: "#252a35" } },
+              y: { ticks: { color: "#8b93a7" }, grid: { display: false } },
+            },
+          },
+        });
+
+        const body = document.getElementById("mon-runs-body");
+        const runs = data.recent_runs || [];
+        if (!runs.length) {
+          body.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">No runs yet — execute a pipeline to populate metrics.</td></tr>`;
+        } else {
+          body.innerHTML = runs.map((r) => {
+            const ts = (r.timestamp || "").replace("T", " ").slice(0, 19);
+            const amt = r.amount != null
+              ? `$${Number(r.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : "—";
+            return `<tr>
+              <td>${escapeHtml(ts)}</td>
+              <td>${escapeHtml(r.vendor || "—")}</td>
+              <td>${escapeHtml(amt)}</td>
+              <td><span class="outcome-pill ${escapeHtml(r.outcome || "")}">${escapeHtml(r.outcome || "—")}</span></td>
+              <td style="font-family:IBM Plex Mono,monospace;font-size:0.68rem">${escapeHtml(String(r.session_id || "").slice(0, 8))}…</td>
+            </tr>`;
+          }).join("");
+        }
+      } catch { /* ignore */ }
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.onopen = () => setWsStatus("WS connected", true);
+      ws.onmessage = (event) => {
+        try { handleEvent(JSON.parse(event.data)); } catch { /* ignore */ }
+      };
+      ws.onclose = () => {
+        setWsStatus("Disconnected — retrying…", false);
+        running = false;
+        runBtn.disabled = false;
+        setTimeout(connect, 1500);
+      };
+      ws.onerror = () => ws.close();
+    }
+
+    function uuid() {
+      if (crypto.randomUUID) return crypto.randomUUID();
+      return "sess-" + Math.random().toString(16).slice(2) + Date.now().toString(16);
+    }
+
+    async function runPipeline() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        setWsStatus("WebSocket not ready", false);
+        return;
+      }
+      clearUI();
+      running = true;
+      runBtn.disabled = true;
+      runBtn.textContent = "Running…";
+
+      // Prefetch graph context so it's visible before negotiation bubbles arrive.
+      prefetchVendorContext(sampleSelect.value);
+
+      const sessionId = uuid();
+      activeSession = sessionId;
+      ws.send(JSON.stringify({ action: "subscribe", session_id: sessionId }));
+
+      try {
+        const res = await fetch("/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sample_id: sampleSelect.value, session_id: sessionId }),
+        });
+        if (!res.ok) throw new Error(await res.text() || res.statusText);
+      } catch (err) {
+        running = false;
+        runBtn.disabled = false;
+        runBtn.textContent = "Run Pipeline";
+        appendStep({
+          step_name: "client_error",
+          step_type: "deterministic",
+          input_summary: "POST /run",
+          output_summary: String(err),
+          details: {},
+        });
+      }
+    }
+
+    async function pollInboxStatus() {
+      try {
+        const res = await fetch("/inbox/status");
+        if (!res.ok) return;
+        const data = await res.json();
+        const n = data.emails_processed || 0;
+        inboxCount.textContent = String(n);
+        if (
+          data.last_session_id &&
+          data.last_session_id !== lastInboxSession &&
+          n > emailsProcessed &&
+          !running
+        ) {
+          lastInboxSession = data.last_session_id;
+          clearUI();
+          activeSession = data.last_session_id;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              action: "subscribe",
+              session_id: data.last_session_id,
+            }));
+          }
+          try {
+            const traceRes = await fetch(`/inbox/trace/${data.last_session_id}`);
+            if (traceRes.ok) {
+              const entries = await traceRes.json();
+              for (const entry of entries) appendStep({ ...entry, type: "audit" });
+            }
+            const reviewsRes = await fetch(`/reviews/${data.last_session_id}`);
+            if (reviewsRes.ok) {
+              const payload = await reviewsRes.json();
+              for (const item of payload.items || []) {
+                upsertReviewCard(item);
+              }
+            }
+          } catch { /* optional */ }
+        }
+        emailsProcessed = n;
+      } catch { /* ignore */ }
+    }
+
+    sampleSelect.addEventListener("change", () => {
+      prefetchVendorContext(sampleSelect.value);
+    });
+    runBtn.addEventListener("click", runPipeline);
+    connect();
+    pollInboxStatus();
+    setInterval(pollInboxStatus, 2000);
+    prefetchVendorContext(sampleSelect.value);
+    refreshMetrics();
+    setInterval(refreshMetrics, 5000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,46 @@
+%PDF-1.4
+1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj
+2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj
+3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>endobj
+4 0 obj<< /Length 721 >>stream
+BT
+/F1 10 Tf
+50 750 Td
+(INVOICE - Cascade Industrial Parts) Tj
+0 -18 Td
+(Bill To: Contoso Procurement     Ship To: Dock B) Tj
+0 -14 Td
+(Date: 2026-06-28) Tj
+0 -28 Td
+(Item                         Qty    Unit      Ext) Tj
+0 -14 Td
+(Bearing assembly BA-440       40   $40.00   $1,600.00) Tj
+0 -14 Td
+(Hydraulic seal kit HS-12      80   $12.00     $960.00) Tj
+0 -14 Td
+(Fastener assortment pack FA-9 20   $32.00     $640.00) Tj
+0 -28 Td
+(Subtotal                                              $3,200.00) Tj
+0 -14 Td
+(Fuel surcharge / misc                                 $64.00) Tj
+0 -14 Td
+(TOTAL DUE USD                                         $3,264.00) Tj
+0 -28 Td
+(Remit to: ar@cascade-parts.com  PO ref: PO-1002) Tj
+ET
+
+endstream
+endobj
+5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000056 00000 n 
+0000000111 00000 n 
+0000000235 00000 n 
+0000001005 00000 n 
+trailer<< /Size 6 /Root 1 0 R >>
+startxref
+1073
+%%EOF

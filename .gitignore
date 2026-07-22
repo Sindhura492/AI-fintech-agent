@@ -1,0 +1,75 @@
+# Environment & secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+**/service-account*.json
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+dist/
+build/
+pip-wheel-metadata/
+
+# Runtime / local data (generated on your machine)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+audit_log.jsonl
+*.jsonl
+metrics.db
+
+# Ingest / temp attachments (untrusted)
+/tmp/
+tmp/
+incoming/
+**/incoming/
+
+# Local storage from LlamaIndex / embeddings / caches
+storage/
+.cache/
+*.parquet
+chroma/
+.chroma/
+
+# IDE / editors / OS
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs & dumps
+*.log
+logs/
+*.out
+core
+.python-version
