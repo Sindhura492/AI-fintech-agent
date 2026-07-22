@@ -29,7 +29,7 @@ class MetricsStore:
         self.path = Path(path) if path is not None else _default_db_path()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        # Per-session scratch: vendor / amount / outcome before pipeline_complete
+        # Scratch fields until pipeline_complete.
         self._scratch: dict[str, dict[str, Any]] = {}
         self._init_db()
 

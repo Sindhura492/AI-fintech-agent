@@ -67,6 +67,16 @@ Thumbs.db
 *.swo
 *~
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+yarn-error.log*
+
+# Sample fixtures & internal docs (keep local)
+sample_docs/
+docs/
+
 # Logs & dumps
 *.log
 logs/

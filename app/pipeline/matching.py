@@ -3,12 +3,14 @@ from __future__ import annotations
 import re
 
 from app.observability.audit import audit_log, get_session_id
-from app.seed.mock_data import open_pos_for_vendor, vendor_name_for_email
+from app.seed.mock_data import (
+    open_pos_for_vendor,
+    resolve_seed_vendor,
+    vendor_name_for_email,
+)
 from app.core import AuditEntry, ExtractedInvoice, PurchaseOrder
 
-# Relative amount proximity required for an auto-match (25%).
-# Wider than the 1% three-way tolerance so small freight variances still link,
-# but tight enough that a wildly wrong PO is not silently selected.
+# Auto-match if invoice is within 25% of PO amount.
 _AMOUNT_PROXIMITY = 0.25
 
 
@@ -63,7 +65,7 @@ def match_to_po(
     Strategy (deterministic, in order):
       1. Resolve vendor via ``sender_email`` against ``VENDOR_EMAILS``.
       2. Fall back to ``extracted_invoice.vendor_name`` if email is unknown.
-      3. Among that vendor's open POs, pick by amount proximity — only if the
+      3. Among that vendor's open POs, pick by amount proximity - only if the
          closest PO is within ``_AMOUNT_PROXIMITY`` (25%) of the invoice total.
 
     If any step fails to produce a confident match, returns ``None`` and
@@ -95,12 +97,18 @@ def match_to_po(
         strategy_used = "vendor_name"
         vendor_name = invoice_vendor or None
 
+    if vendor_name:
+        # Normalize "Northwind Components LLC" → seed "Northwind Components"
+        resolved = resolve_seed_vendor(vendor_name)
+        if resolved:
+            vendor_name = resolved
+
     if not vendor_name:
         _emit_match_audit(
             strategy="manual_review",
             input_summary=input_summary,
             output_summary=(
-                "No confident match — unknown sender and empty vendor_name; "
+                "No confident match - unknown sender and empty vendor_name; "
                 "needs manual PO matching"
             ),
             details={
@@ -111,8 +119,7 @@ def match_to_po(
         )
         return None
 
-    # If email mapped to a vendor, optionally warn when invoice vendor disagrees
-    # but still proceed with the email-authenticated vendor (stronger signal).
+    # Prefer email-authenticated vendor over invoice text.
     open_pos = open_pos_for_vendor(vendor_name)
     if not open_pos:
         _emit_match_audit(

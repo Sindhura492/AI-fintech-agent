@@ -7,26 +7,48 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from app.core import (
+    ExtractedInvoice,
+    GateDecision,
+    PurchaseOrder,
+    Settlement,
+    ValidationResult,
+)
+from app.human_loop.notifications import notify_escalation
 from app.observability.audit import audit_log, get_session_id, write_audit_entry
 from app.pipeline.enforcement import execute_payment
-from app.human_loop.notifications import notify_escalation
-from app.core import GateDecision, Settlement
 
 EscalationStatus = Literal["pending", "approved", "denied"]
 
-# Friendlier copy for notifications / UI when gate reasons are terse.
+# Friendlier copy for terse gate reasons.
 REASON_DISPLAY: dict[str, str] = {
-    "no convergence": "no convergence after 3 rounds",
-    "above auto-approval threshold": "above $5000 threshold",
-    "above $5000 threshold": "above $5000 threshold",
+    "no convergence": "no convergence after negotiation rounds",
+    "no convergence after 3 rounds": "no convergence after negotiation rounds",
+    "no convergence after negotiation rounds": "no convergence after negotiation rounds",
+    "above auto-approval threshold": "above $5000 with no similar approved precedent",
+    "above $5000 threshold": "above $5000 with no similar approved precedent",
+    "above $5000 threshold with no similar approved precedent": (
+        "above $5000 with no similar approved precedent"
+    ),
     "no matching PO found": "no matching PO found",
+    "outside negotiation bounds": "outside PO policy band",
 }
 
 
 def display_reason(reason: str) -> str:
     """Map internal gate reasons to human-facing notification text."""
     key = reason.strip().lower()
-    return REASON_DISPLAY.get(key, reason)
+    if key in REASON_DISPLAY:
+        return REASON_DISPLAY[key]
+    if "outside vendor's past agreed range" in key or "outside vendor" in key:
+        return "unlike past accepted settlements for this vendor"
+    if "outlier settlement" in key:
+        return "amount outlier vs past approved settlements"
+    if "does not match po/receipt" in key or "contract" in key:
+        return "contract terms still unmatched after negotiation"
+    if "early-pay" in key or "discount" in key:
+        return "payment terms mismatch"
+    return reason
 
 
 @dataclass
@@ -39,6 +61,9 @@ class EscalatedCase:
     status: EscalationStatus = "pending"
     settlement: Settlement | None = None
     po_id: str | None = None
+    invoice: ExtractedInvoice | None = None
+    po: PurchaseOrder | None = None
+    validation: ValidationResult | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: datetime | None = None
     resolved_action: Literal["approve", "deny"] | None = None
@@ -68,6 +93,7 @@ class EscalationStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._cases: dict[str, EscalatedCase] = {}
+        self._resolved: dict[str, threading.Event] = {}
 
     def register(
         self,
@@ -78,6 +104,9 @@ class EscalationStore:
         decision: GateDecision,
         settlement: Settlement | None = None,
         po_id: str | None = None,
+        invoice: ExtractedInvoice | None = None,
+        po: PurchaseOrder | None = None,
+        validation: ValidationResult | None = None,
         notify: bool = True,
     ) -> EscalatedCase | None:
         """Record a pending escalation and optionally fire a desktop notification.
@@ -99,9 +128,13 @@ class EscalationStore:
             rule_fired=decision.rule_fired,
             settlement=settlement,
             po_id=po_id,
+            invoice=invoice,
+            po=po,
+            validation=validation,
         )
         with self._lock:
             self._cases[sid] = case
+            self._resolved[sid] = threading.Event()
 
         if notify:
             notify_escalation(
@@ -133,7 +166,7 @@ class EscalationStore:
                 f"{case.amount if case.amount is not None else 'n/a'}"
             ),
             output_summary=(
-                f"Awaiting human review — {display_reason(case.reason)} "
+                f"Awaiting human review - {display_reason(case.reason)} "
                 f"(rule={case.rule_fired})"
             ),
             details={
@@ -156,6 +189,33 @@ class EscalationStore:
         with self._lock:
             return [c for c in self._cases.values() if c.status == "pending"]
 
+    def wait_until_resolved(
+        self,
+        session_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> EscalatedCase | None:
+        """Block until approve/deny for ``session_id`` (or timeout).
+
+        Used by the email poller so multi-PDF messages do not continue while
+        a prior attachment is still awaiting human review.
+        """
+        with self._lock:
+            case = self._cases.get(session_id)
+            if case is not None and case.status != "pending":
+                return case
+            event = self._resolved.get(session_id)
+            if event is None:
+                event = threading.Event()
+                self._resolved[session_id] = event
+
+        ok = event.wait(timeout=timeout)
+        with self._lock:
+            case = self._cases.get(session_id)
+            if not ok:
+                return case
+            return case
+
     def resolve(
         self,
         session_id: str,
@@ -177,11 +237,11 @@ class EscalationStore:
                 raise ValueError(
                     f"Case {session_id} already resolved as {case.status}"
                 )
-            # Work on the object under lock for status transition; payment outside.
             case.status = "approved" if action == "approve" else "denied"
             case.resolved_action = action
             case.resolved_at = datetime.now(timezone.utc)
             settlement = case.settlement
+            done = self._resolved.get(session_id)
 
         payment_executed = False
         if action == "approve" and settlement is not None:
@@ -194,6 +254,23 @@ class EscalationStore:
             payment_executed = True
             with self._lock:
                 case.payment_executed = True
+            # Rewrite Neo4j so future history includes this approved settlement.
+            if case.invoice is not None:
+                try:
+                    from app.pipeline.persist_outcomes import persist_pipeline_outcomes
+
+                    persist_pipeline_outcomes(
+                        invoice=case.invoice,
+                        po=case.po,
+                        validation=case.validation,
+                        settlement=settlement,
+                        decision=human_decision,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+        if done is not None:
+            done.set()
 
         write_audit_entry(
             step_name="human_decision",
@@ -203,7 +280,7 @@ class EscalationStore:
                 f"rule={case.rule_fired}"
             ),
             output_summary=(
-                f"Human {action}d — vendor={case.vendor_name} "
+                f"Human {action}d - vendor={case.vendor_name} "
                 f"amount={case.amount if case.amount is not None else 'n/a'} "
                 f"payment_executed={payment_executed}"
             ),

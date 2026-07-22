@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_username: str = ""  # alternate env name; prefer neo4j_user
     neo4j_password: str = ""
-    # Opt-in when a corporate TLS proxy injects a self-signed cert (Aura + MITM).
+    # Trust corporate TLS MITM (Aura neo4j+s → neo4j+ssc).
     neo4j_trust_all: bool = False
 
     email_address: str = ""

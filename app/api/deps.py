@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-UI_DIR = ROOT / "ui"
+UI_DIR = ROOT / "ui"  # legacy monolithic HTML (fallback)
+FRONTEND_DIST = ROOT / "frontend" / "dist"
 SAMPLE_DOCS = ROOT / "sample_docs"
 
 SAMPLES: dict[str, tuple[str, str]] = {

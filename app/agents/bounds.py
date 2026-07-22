@@ -13,6 +13,14 @@ from app.core.schemas_negotiation import DisputeProposal
 BOUNDS_PCT = 0.05  # PO amount ± 5%
 AMOUNT_EQ_TOLERANCE = 0.01  # $0.01 — treat as same offer
 
+# How far a new settlement may drift from this vendor's past agreed settlements
+# before we treat it as "out of historical range" (escalate after negotiation).
+# Tight on purpose: PO±5% is the hard policy band; this catches "we've never
+# accepted a settlement like this for this vendor before."
+HISTORICAL_PAD_PCT = 0.03
+HISTORICAL_MIN_SAMPLES = 2
+HISTORICAL_MIN_PAD_USD = 25.0
+
 DEFAULT_DAYS_EARLY = 10
 DISCOUNT_MATH_TOLERANCE = 0.01  # $0.01
 
@@ -26,6 +34,121 @@ def compute_bounds(po: PurchaseOrder) -> tuple[float, float]:
 def within_bounds(amount: float, min_acceptable: float, max_acceptable: float) -> bool:
     """Deterministic inclusive range check."""
     return min_acceptable <= amount <= max_acceptable
+
+
+def historical_settlement_band(
+    vendor_context: dict | None,
+    *,
+    min_samples: int = HISTORICAL_MIN_SAMPLES,
+    pad_pct: float = HISTORICAL_PAD_PCT,
+) -> dict[str, float | int] | None:
+    """Band from this vendor's past *agreed* settlements.
+
+    Returns None when there is not enough history. Used to detect settlements
+    that do not match what this vendor has accepted before.
+    """
+    if not vendor_context:
+        return None
+    outcomes = vendor_context.get("settlement_outcomes") or {}
+    recent = outcomes.get("recent") or []
+    amounts: list[float] = []
+    for row in recent:
+        if not row.get("agreed_by_both"):
+            continue
+        try:
+            amounts.append(float(row.get("final_amount")))
+        except (TypeError, ValueError):
+            continue
+    avg = outcomes.get("avg_settlement_amount")
+    if avg is not None and not amounts:
+        try:
+            amounts.append(float(avg))
+        except (TypeError, ValueError):
+            pass
+    # Prefer unique agreed samples; duplicate avg if only one recent point.
+    if len(amounts) < min_samples and avg is not None:
+        try:
+            a = float(avg)
+            if a not in amounts:
+                amounts.append(a)
+        except (TypeError, ValueError):
+            pass
+    if len(amounts) < min_samples:
+        return None
+
+    lo = min(amounts)
+    hi = max(amounts)
+    mid = sum(amounts) / len(amounts)
+    # Tight pad around past accepted amounts (not as wide as PO ±5%).
+    pad = max(mid * pad_pct, HISTORICAL_MIN_PAD_USD)
+    return {
+        "min": round(lo - pad, 2),
+        "max": round(hi + pad, 2),
+        "avg": round(mid, 2),
+        "n": len(amounts),
+        "raw_min": round(lo, 2),
+        "raw_max": round(hi, 2),
+    }
+
+
+def outside_historical_range(
+    amount: float,
+    vendor_context: dict | None,
+    *,
+    po_amount: float | None = None,
+    receipt_amount: float | None = None,
+) -> tuple[bool, dict[str, float | int] | None]:
+    """True when ``amount`` is outside this vendor's past settlement band.
+
+    Settling at the verified PO or goods-receipt amount is never an outlier -
+    that is the contract baseline, even if recent history is mostly discounted
+    early-pay settlements.
+    """
+    if po_amount is not None and abs(amount - float(po_amount)) <= AMOUNT_EQ_TOLERANCE:
+        return False, historical_settlement_band(vendor_context)
+    if receipt_amount is not None and abs(amount - float(receipt_amount)) <= AMOUNT_EQ_TOLERANCE:
+        return False, historical_settlement_band(vendor_context)
+
+    band = historical_settlement_band(vendor_context)
+    if band is None:
+        return False, None
+    out = not within_bounds(amount, float(band["min"]), float(band["max"]))
+    return out, band
+
+
+def has_favorable_precedent(
+    vendor_context: dict | None,
+    amount: float,
+    *,
+    po_amount: float | None = None,
+    tolerance_pct: float = 0.03,
+) -> bool:
+    """True when Neo4j already has a similar *approved* settlement for this vendor.
+
+    Used so repeat favorable cases (same PO amount / prior auto-pay) do not
+    keep escalating.
+    """
+    if not vendor_context:
+        return False
+    outcomes = vendor_context.get("settlement_outcomes") or {}
+    recent = outcomes.get("recent") or []
+    tol = max(abs(amount) * tolerance_pct, 1.0)
+    for row in recent:
+        gate = str(row.get("gate_action") or "").lower()
+        if gate != "approve":
+            continue
+        if row.get("agreed_by_both") is False:
+            continue
+        try:
+            prior = float(row.get("final_amount"))
+        except (TypeError, ValueError):
+            continue
+        if abs(prior - amount) <= tol:
+            return True
+        if po_amount is not None and abs(prior - float(po_amount)) <= AMOUNT_EQ_TOLERANCE:
+            if abs(amount - float(po_amount)) <= AMOUNT_EQ_TOLERANCE:
+                return True
+    return False
 
 
 def verify_against_source(
@@ -161,7 +284,7 @@ def route_after_buyer(
         return "bounds_reject_buyer"
 
     if _converged(state):
-        # Convergence amount must also be in bounds (supplier already checked).
+        # Final amount must stay in bounds.
         supplier = _last_proposal(state.get("proposals") or [], "supplier")
         amount = (
             supplier.proposed_amount

@@ -275,8 +275,47 @@ def main() -> int:
             f"{VENDORS[spec.vendor_key]['name']}"
         )
 
+    print("Generating edge-case unknown vendor…")
+    path = write_unknown_vendor_pdf()
+    written.append(path)
+    print(f"  {path.name}  unknown vendor → expect NO_MATCHING_PO escalate")
+
     print(f"Done — wrote {len(written)} PDFs under {SAMPLE_DOCS}/")
     return 0
+
+
+def write_unknown_vendor_pdf() -> Path:
+    """Edge-case PDF: vendor not in seed POs → email path escalates NO_MATCHING_PO."""
+    lines = [
+        "INVOICE - Atlas Freight GmbH",
+        "",
+        "Hafenstrasse 12, 80331 Muenchen, Germany",
+        "Email: ar@atlas-freight.example",
+        "",
+        "Bill To: Contoso Procurement",
+        "456 Enterprise Way, Redmond, WA 98052",
+        "",
+        "Invoice Number:  INV-ATLAS-7734",
+        "Invoice Date:    July 15, 2026",
+        "PO Reference:    (none on file)",
+        "Payment Terms:   Net 30",
+        "Currency:        USD",
+        "",
+        "Description                                         Amount",
+        "-" * 58,
+        f"{'Freight Service (Berlin to Munich)':<48} {'$8,200.00':>9}",
+        f"{'Fuel surcharge':<48} {'$1,100.00':>9}",
+        "-" * 58,
+        f"{'Subtotal':<48} {'$9,300.00':>9}",
+        f"{'Tax':<48} {'$0.00':>9}",
+        f"{'TOTAL DUE':<48} {'$9,300.00':>9}",
+        "",
+        "Kind: unknown_vendor  |  not in Contoso open PO list",
+        "Remit to: ar@atlas-freight.example",
+    ]
+    out = SAMPLE_DOCS / "invoice_unknown_vendor.pdf"
+    _write_pdf(out, lines)
+    return out
 
 
 if __name__ == "__main__":

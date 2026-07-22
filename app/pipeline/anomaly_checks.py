@@ -23,7 +23,7 @@ def run_anomaly_checks(
         z_score=float(anomaly["z_score"]),
     )
 
-    # Standalone ML step — IsolationForest (authoritative anomaly flag for review)
+    # IsolationForest anomaly flag for review.
     from app.human_loop.review_queue import anomaly_review_queue
     from app.intelligence.anomaly import explain_anomaly, get_anomaly_detector
 

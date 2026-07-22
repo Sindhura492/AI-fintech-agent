@@ -14,30 +14,16 @@ router = APIRouter(tags=["websocket"])
 
 @router.websocket("/ws")
 async def audit_websocket(websocket: WebSocket) -> None:
-    """Stream audit + live agent-chat events for a subscribed session."""
-    await websocket.accept()
-    queue = None
-    try:
-        while True:
-            if queue is None:
-                message = await websocket.receive_json()
-                if message.get("action") != "subscribe" or not message.get("session_id"):
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "message": 'Send {"action":"subscribe","session_id":"..."} first',
-                        }
-                    )
-                    continue
-                queue = audit_log.subscribe(session_id=str(message["session_id"]))
-                await websocket.send_json(
-                    {
-                        "type": "subscribed",
-                        "session_id": message["session_id"],
-                    }
-                )
-                continue
+    """Stream audit + live events.
 
+    On connect, subscribe to all sessions so inbox announcements arrive
+    before the UI knows the session id. Clients may re-subscribe to filter.
+    """
+    await websocket.accept()
+    queue = audit_log.subscribe(session_id=None)
+    try:
+        await websocket.send_json({"type": "ready"})
+        while True:
             get_task = asyncio.create_task(queue.get())
             recv_task = asyncio.create_task(websocket.receive_json())
             done, pending = await asyncio.wait(
@@ -73,6 +59,10 @@ async def audit_websocket(websocket: WebSocket) -> None:
                             "session_id": message["session_id"],
                         }
                     )
+                elif message.get("action") == "subscribe_all":
+                    audit_log.unsubscribe(queue)
+                    queue = audit_log.subscribe(session_id=None)
+                    await websocket.send_json({"type": "ready"})
     except WebSocketDisconnect:
         pass
     finally:

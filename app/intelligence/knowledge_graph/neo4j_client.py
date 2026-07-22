@@ -14,7 +14,7 @@ class Neo4jWriteError(RuntimeError):
 def tx_run(tx: Any, cypher: str, parameters: dict[str, Any] | None = None) -> Any:
     """Run one Cypher statement inside an open write transaction."""
     compact = truncate_for_log(" ".join(cypher.split()), 180)
-    logger.info("[NEO4J] Cypher: %s", compact)
+    logger.info("[NEO4J] Write confirmed")
     return tx.run(cypher, parameters or {})
 
 

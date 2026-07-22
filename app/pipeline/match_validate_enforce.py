@@ -6,6 +6,7 @@ from app.agents import (
     run_negotiation,
     within_bounds,
 )
+from app.agents.bounds import outside_historical_range
 from app.core import (
     CashOptimizationProposal,
     ExtractedInvoice,
@@ -55,7 +56,7 @@ def _run_match_validate_enforce(
         ),
         (
             f"matched={validation.matched} discrepancy=${validation.discrepancy_amount:.2f} "
-            f"— {validation.reason}"
+            f"- {validation.reason}"
         ),
         duration_ms=t["ms"],
         matched=validation.matched,
@@ -65,18 +66,155 @@ def _run_match_validate_enforce(
     history = get_vendor_amounts(invoice.vendor_name)
     anomaly = run_anomaly_checks(invoice, po, history)
 
+    # ML anomaly blocks negotiation/payment until human clears it.
+    from app.human_loop.review_queue import anomaly_review_queue
+    from app.observability.audit import audit_log
+
+    sid = get_session_id()
+    pending_anom = anomaly_review_queue.get(sid) if sid else None
+    if pending_anom is not None and pending_anom.status == "pending_review":
+        _audit(
+            "anomaly_hold",
+            "deterministic",
+            f"vendor={invoice.vendor_name} amount=${invoice.invoice_amount:.2f}",
+            "pipeline paused - waiting for human approve/deny on ML anomaly",
+            anomaly_score=pending_anom.anomaly_score,
+        )
+        audit_log.publish_live(
+            {
+                "type": "anomaly_hold",
+                "kind": "anomaly",
+                "session_id": sid,
+                "vendor_name": pending_anom.vendor_name,
+                "amount": pending_anom.amount,
+                "anomaly_score": pending_anom.anomaly_score,
+                "explanation": pending_anom.explanation,
+                "status": "pending_review",
+            },
+            session_id=sid,
+        )
+        while True:
+            item = anomaly_review_queue.wait_until_resolved(sid, timeout=5.0)
+            if item is not None and item.status != "pending_review":
+                break
+
+        if item is not None and item.status == "denied":
+            min_a, max_a = compute_bounds(po)
+            settlement = Settlement(
+                final_amount=invoice.invoice_amount,
+                agreed_by_both=False,
+                within_bounds=within_bounds(invoice.invoice_amount, min_a, max_a),
+            )
+            decision = GateDecision(
+                action="deny",
+                reason="human confirmed ML anomaly - payment blocked",
+                rule_fired="ANOMALY_HUMAN_DENIED",
+            )
+            _audit(
+                "anomaly_blocked_pipeline",
+                "deterministic",
+                f"session_id={sid}",
+                "human denied anomaly - skipping negotiation and payment",
+                action=decision.action,
+                rule_fired=decision.rule_fired,
+            )
+            _audit(
+                "pipeline_complete",
+                "deterministic",
+                f"session_id={sid}",
+                f"final action={decision.action} payment_executed=False",
+                action=decision.action,
+                payment_executed=False,
+            )
+            persist_pipeline_outcomes(
+                invoice=invoice,
+                po=po,
+                validation=validation,
+                settlement=settlement,
+                decision=decision,
+            )
+            return validation, anomaly, settlement, decision, False, None
+
+        _audit(
+            "anomaly_cleared",
+            "deterministic",
+            f"session_id={sid}",
+            "human cleared anomaly - resuming negotiation / enforcement",
+        )
+
+    # Publish vendor history for UI.
+    vendor_context: dict = {}
+    try:
+        from app.intelligence.knowledge_graph import get_knowledge_graph, publish_vendor_context
+
+        vendor_context = get_knowledge_graph().get_vendor_context(invoice.vendor_name)
+        publish_vendor_context(vendor_context)
+    except Exception:  # noqa: BLE001
+        vendor_context = {}
+
     cash_opt: CashOptimizationProposal | None = None
     eligible = is_early_payment_eligible(invoice.vendor_name)
 
-    if not validation.matched:
-        route = "dispute_negotiation"
+    out_hist, hist_band = outside_historical_range(
+        invoice.invoice_amount,
+        vendor_context,
+        po_amount=po.agreed_amount,
+        receipt_amount=receipt.received_amount,
+    )
+    from app.agents.bounds import has_favorable_precedent
+
+    favorable = has_favorable_precedent(
+        vendor_context,
+        invoice.invoice_amount,
+        po_amount=po.agreed_amount,
+    )
+    # Negotiate on discrepancy, or on true outliers with no favorable precedent.
+    needs_negotiation = (not validation.matched) or (out_hist and not favorable)
+    if hist_band is not None:
+        _audit(
+            "historical_settlement_check",
+            "deterministic",
+            (
+                f"invoice=${invoice.invoice_amount:.2f} "
+                f"vendor_history_n={int(hist_band['n'])}"
+            ),
+            (
+                f"outside_history={out_hist} "
+                f"band=${float(hist_band['min']):.2f}-${float(hist_band['max']):.2f} "
+                f"(past agreed raw "
+                f"${float(hist_band['raw_min']):.2f}-${float(hist_band['raw_max']):.2f})"
+            ),
+            outside_history=out_hist,
+            hist_min=float(hist_band["min"]),
+            hist_max=float(hist_band["max"]),
+            hist_n=int(hist_band["n"]),
+        )
+
+    # Negotiate when three-way fails OR amount is unlike past accepted settlements.
+    needs_negotiation = (not validation.matched) or out_hist
+
+    if needs_negotiation:
+        route = (
+            "dispute_negotiation"
+            if not validation.matched
+            else "history_outlier_negotiation"
+        )
         _audit(
             "route_decision",
             "deterministic",
-            "three_way_match matched=False",
-            "Route → dispute negotiation (amount discrepancy)",
+            (
+                "three_way_match matched=False"
+                if not validation.matched
+                else "invoice outside vendor historical settlement range"
+            ),
+            (
+                "Route → dispute negotiation (amount discrepancy)"
+                if not validation.matched
+                else "Route → negotiation (unlike past accepted settlements)"
+            ),
             route=route,
-            matched=False,
+            matched=validation.matched,
+            outside_history=out_hist,
             discount_eligible=eligible,
         )
 
@@ -85,20 +223,20 @@ def _run_match_validate_enforce(
 
         kg = get_knowledge_graph()
         with _timer() as t:
-            vendor_context = kg.get_vendor_context(invoice.vendor_name)
-        # knowledge_graph_read already audited inside get_vendor_context
-        publish_vendor_context(vendor_context)
+            if not vendor_context:
+                vendor_context = kg.get_vendor_context(invoice.vendor_name)
+                publish_vendor_context(vendor_context)
         with _timer() as t_rag:
             similar = query_similar_disputes(invoice)
-        # rag_similar_disputes already audited inside query_similar_disputes
         _ = t_rag
 
         _audit(
             "negotiation_start",
             "deterministic",
-            f"discrepancy=${validation.discrepancy_amount:.2f}",
+            f"discrepancy=${validation.discrepancy_amount:.2f} outside_history={out_hist}",
             "invoking buyer/supplier dispute LangGraph",
             discrepancy_amount=validation.discrepancy_amount,
+            outside_history=out_hist,
         )
         with _timer() as t:
             settlement, _neg_audit = run_negotiation(
@@ -106,7 +244,7 @@ def _run_match_validate_enforce(
                 po=po,
                 receipt=receipt,
                 validation=validation,
-                max_rounds=3,
+                max_rounds=5,
                 vendor_context=vendor_context,
                 similar_disputes=similar,
             )
@@ -160,7 +298,7 @@ def _run_match_validate_enforce(
             ),
             (
                 f"accepted={cash_opt.accepted} → settlement "
-                f"${settlement.final_amount:.2f} — {cash_opt.reasoning[:160]}"
+                f"${settlement.final_amount:.2f} - {cash_opt.reasoning[:160]}"
             ),
             duration_ms=t["ms"],
             accepted=cash_opt.accepted,
@@ -202,7 +340,16 @@ def _run_match_validate_enforce(
         )
 
     with _timer() as t:
-        decision = enforce(settlement, validation)
+        decision = enforce(
+            settlement,
+            validation,
+            vendor_context=vendor_context,
+            po_amount=po.agreed_amount,
+            receipt_amount=receipt.received_amount,
+            invoice_amount=invoice.invoice_amount,
+            vendor_name=invoice.vendor_name,
+            cash_opt=cash_opt,
+        )
     _audit(
         "enforce",
         "deterministic",
@@ -210,7 +357,7 @@ def _run_match_validate_enforce(
             f"settlement=${settlement.final_amount:.2f} "
             f"agreed={settlement.agreed_by_both} bounds={settlement.within_bounds}"
         ),
-        f"action={decision.action} rule_fired={decision.rule_fired} — {decision.reason}",
+        f"action={decision.action} rule_fired={decision.rule_fired} - {decision.reason}",
         duration_ms=t["ms"],
         action=decision.action,
         rule_fired=decision.rule_fired,
@@ -229,12 +376,21 @@ def _run_match_validate_enforce(
             payment_executed=True,
             amount=settlement.final_amount,
         )
+        try:
+            from app.human_loop.notifications import notify_auto_approved
+
+            notify_auto_approved(
+                vendor_name=invoice.vendor_name,
+                amount=settlement.final_amount,
+            )
+        except Exception:  # noqa: BLE001
+            pass
     else:
         _audit(
             "execute_payment_skipped",
             "deterministic",
             f"GateDecision.action={decision.action}",
-            "payment not executed — gate did not approve",
+            "payment not executed - gate did not approve",
             payment_executed=False,
             action=decision.action,
         )
@@ -247,6 +403,9 @@ def _run_match_validate_enforce(
                 decision=decision,
                 settlement=settlement,
                 po_id=po.po_id,
+                invoice=invoice,
+                po=po,
+                validation=validation,
             )
 
     _audit(

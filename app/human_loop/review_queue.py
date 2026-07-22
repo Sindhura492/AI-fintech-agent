@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from app.core import ExtractedInvoice
+from app.human_loop.notifications import notify_anomaly
 from app.intelligence.anomaly import AnomalyResult
 from app.observability.audit import audit_log, get_session_id, write_audit_entry
-from app.human_loop.notifications import notify_anomaly
-from app.core import ExtractedInvoice
 
 AnomalyReviewStatus = Literal["pending_review", "approved", "denied"]
 
@@ -52,6 +52,7 @@ class AnomalyReviewQueue:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._items: dict[str, AnomalyReviewItem] = {}
+        self._resolved: dict[str, threading.Event] = {}
 
     def enqueue(
         self,
@@ -82,6 +83,7 @@ class AnomalyReviewQueue:
         )
         with self._lock:
             self._items[sid] = item
+            self._resolved[sid] = threading.Event()
 
         if notify:
             notify_anomaly(
@@ -111,7 +113,7 @@ class AnomalyReviewQueue:
                 f"vendor={item.vendor_name} amount=${item.amount:.2f} "
                 f"score={item.anomaly_score}"
             ),
-            output_summary=f"pending_review — {explanation[:200]}",
+            output_summary=f"pending_review - {explanation[:200]}",
             details={
                 "session_id": sid,
                 "vendor_name": item.vendor_name,
@@ -133,12 +135,32 @@ class AnomalyReviewQueue:
         with self._lock:
             return [i for i in self._items.values() if i.status == "pending_review"]
 
+    def wait_until_resolved(
+        self,
+        session_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> AnomalyReviewItem | None:
+        """Block until human approve/deny (or timeout)."""
+        with self._lock:
+            item = self._items.get(session_id)
+            if item is not None and item.status != "pending_review":
+                return item
+            event = self._resolved.get(session_id)
+            if event is None:
+                event = threading.Event()
+                self._resolved[session_id] = event
+
+        event.wait(timeout=timeout)
+        with self._lock:
+            return self._items.get(session_id)
+
     def resolve(
         self,
         session_id: str,
         action: Literal["approve", "deny"],
     ) -> AnomalyReviewItem:
-        """Human clears (approve) or confirms (deny) an ML-flagged anomaly."""
+        """Human clears (approve → pipeline continues) or stops (deny)."""
         if action not in ("approve", "deny"):
             raise ValueError(f"action must be approve or deny, got {action!r}")
 
@@ -153,6 +175,10 @@ class AnomalyReviewQueue:
             item.status = "approved" if action == "approve" else "denied"
             item.resolved_action = action
             item.resolved_at = datetime.now(timezone.utc)
+            done = self._resolved.get(session_id)
+
+        if done is not None:
+            done.set()
 
         write_audit_entry(
             step_name="anomaly_human_decision",
@@ -162,8 +188,9 @@ class AnomalyReviewQueue:
                 f"method={item.method}"
             ),
             output_summary=(
-                f"Human {action}d anomaly — vendor={item.vendor_name} "
-                f"amount=${item.amount:.2f}"
+                f"Human {action}d anomaly - vendor={item.vendor_name} "
+                f"amount=${item.amount:.2f} "
+                f"({'pipeline resumes' if action == 'approve' else 'pipeline stopped'})"
             ),
             details={
                 "session_id": session_id,

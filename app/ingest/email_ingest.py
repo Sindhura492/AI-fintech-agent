@@ -20,7 +20,7 @@ from app.ingest.email_helpers import (
 
 logger = logging.getLogger(__name__)
 
-# Raw bytes land here — still untrusted until the sandbox reads them.
+# Untrusted raw bytes until sandbox parses.
 INCOMING_DIR = Path("/tmp/incoming")
 DEFAULT_IMAP_HOST = "imap.gmail.com"
 DEFAULT_IMAP_PORT = 993
@@ -31,6 +31,8 @@ _inbox_listening = False
 _emails_processed = 0
 _last_session_id: str | None = None
 _last_sender: str | None = None
+_active_session_id: str | None = None
+
 
 def get_inbox_stats() -> dict[str, str | int | bool | None]:
     """Snapshot for GET /inbox/status (UI poll)."""
@@ -39,13 +41,45 @@ def get_inbox_stats() -> dict[str, str | int | bool | None]:
         "emails_processed": _emails_processed,
         "last_session_id": _last_session_id,
         "last_sender": _last_sender,
+        "active_session_id": _active_session_id,
     }
 
+
+def mark_active_session(session_id: str, sender: str = "") -> None:
+    """Announce an email pipeline session as soon as it starts (UI can subscribe)."""
+    global _active_session_id, _last_sender
+    _active_session_id = session_id or None
+    if sender:
+        _last_sender = sender
+    if not session_id:
+        return
+    try:
+        from app.observability.audit import audit_log
+
+        audit_log.broadcast(
+            {
+                "type": "inbox_session_started",
+                "session_id": session_id,
+                "sender": sender or _last_sender,
+            }
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def clear_active_session(session_id: str | None = None) -> None:
+    global _active_session_id
+    if session_id is None or _active_session_id == session_id:
+        _active_session_id = None
+
+
 def _record_processed(session_id: str, sender: str) -> None:
-    global _emails_processed, _last_session_id, _last_sender
+    global _emails_processed, _last_session_id, _last_sender, _active_session_id
     _emails_processed += 1
     _last_session_id = session_id
     _last_sender = sender
+    if _active_session_id == session_id:
+        _active_session_id = None
 
 def _require_credentials() -> tuple[str, str]:
     s = get_settings()
@@ -70,7 +104,7 @@ def _connect() -> imaplib.IMAP4_SSL:
         client.login(address, password)
         return client
     except Exception as exc:
-        # imaplib may echo credentials in raw error text — never re-raise as-is.
+        # Redact IMAP errors (may contain credentials).
         raise RuntimeError(
             f"IMAP connection/login failed for user={address!r} host={host!r}: "
             f"{type(exc).__name__} (details redacted)"
@@ -151,7 +185,7 @@ def fetch_unread_invoices() -> list[dict]:
                 if not _is_pdf_part(part, name, payload_bytes):
                     continue
 
-                # Save raw bytes only — never open/parse the PDF here.
+                # Save bytes only; sandbox parses later.
                 out_name = f"{uid_str}_{_safe_filename(name)}"
                 if not out_name.lower().endswith(".pdf"):
                     out_name += ".pdf"
@@ -198,22 +232,32 @@ def mark_email_seen(uid: str) -> None:
         except Exception:
             pass
 
+def _result_needs_human(result: dict) -> bool:
+    """True when the pipeline left a pending escalation (block next PDF)."""
+    if result.get("status") == "needs_manual_po_matching":
+        return True
+    decision = result.get("decision") or {}
+    return decision.get("action") == "escalate"
+
+
 async def poll_inbox_loop(interval: float = POLL_INTERVAL_SECONDS) -> None:
     """Poll Gmail every ``interval`` seconds and hand PDFs to the pipeline.
 
     For each unread email with PDF attachments, calls
     ``orchestrator.run_pipeline_from_email(file_path, sender_email)``.
 
-    Emails are marked read only after every PDF for that message has been
-    successfully handed off (pipeline returned without raising).
+    If a PDF escalates, later attachments on the same email wait until that
+    case is approved or denied in the UI. Emails are marked read only after
+    every PDF has been handed off (and any waits finished).
     """
     global _inbox_listening
+    from app.human_loop.escalations import escalation_store
     from app.pipeline.orchestrator import run_pipeline_from_email
 
     _inbox_listening = True
     logger.info(
         "Starting inbox poll loop (every %.0fs). "
-        "Attachments are untrusted input — sandbox parses them later.",
+        "Attachments are untrusted input - sandbox parses them later.",
         interval,
     )
 
@@ -230,7 +274,7 @@ async def poll_inbox_loop(interval: float = POLL_INTERVAL_SECONDS) -> None:
 
                 if not paths:
                     logger.info(
-                        "uid=%s from=%r subject=%r has no PDF — leaving unread",
+                        "uid=%s from=%r subject=%r has no PDF - leaving unread",
                         uid,
                         sender,
                         item.get("subject"),
@@ -238,12 +282,15 @@ async def poll_inbox_loop(interval: float = POLL_INTERVAL_SECONDS) -> None:
                     continue
 
                 handoff_ok = True
-                for file_path in paths:
+                for idx, file_path in enumerate(paths):
                     try:
                         logger.info(
-                            "Handoff to run_pipeline_from_email uid=%s file=%s sender=%r",
+                            "Handoff to run_pipeline_from_email uid=%s "
+                            "file=%s (%d/%d) sender=%r",
                             uid,
                             file_path,
+                            idx + 1,
+                            len(paths),
                             sender,
                         )
                         result = await asyncio.to_thread(
@@ -252,24 +299,52 @@ async def poll_inbox_loop(interval: float = POLL_INTERVAL_SECONDS) -> None:
                                 sender,
                             )
                         )
-                        _record_processed(
-                            str(result.get("session_id") or ""),
-                            sender,
-                        )
-                        if result.get("status") == "needs_manual_po_matching":
+                        session_id = str(result.get("session_id") or "")
+                        _record_processed(session_id, sender)
+
+                        if _result_needs_human(result) and idx < len(paths) - 1:
                             logger.warning(
-                                "uid=%s no matching PO — escalated session=%s",
+                                "uid=%s session=%s escalated - waiting for "
+                                "approve/deny before next attachment "
+                                "(%d remaining)",
                                 uid,
-                                result.get("session_id"),
+                                session_id,
+                                len(paths) - idx - 1,
                             )
+                            if session_id:
+                                while True:
+                                    case = await asyncio.to_thread(
+                                        lambda sid=session_id: (
+                                            escalation_store.wait_until_resolved(
+                                                sid,
+                                                timeout=5.0,
+                                            )
+                                        )
+                                    )
+                                    if case is not None and case.status != "pending":
+                                        logger.info(
+                                            "uid=%s session=%s human resolved "
+                                            "as %s - continuing",
+                                            uid,
+                                            session_id,
+                                            case.status,
+                                        )
+                                        break
+                                    logger.info(
+                                        "uid=%s session=%s still awaiting "
+                                        "human approve/deny…",
+                                        uid,
+                                        session_id,
+                                    )
                     except Exception:
                         handoff_ok = False
                         logger.exception(
-                            "Pipeline failed for uid=%s file=%s — "
+                            "Pipeline failed for uid=%s file=%s - "
                             "email stays UNSEEN for retry",
                             uid,
                             file_path,
                         )
+                        break
 
                 if handoff_ok:
                     try:
@@ -280,10 +355,10 @@ async def poll_inbox_loop(interval: float = POLL_INTERVAL_SECONDS) -> None:
                             uid,
                         )
         except Exception:
-            # Avoid logger.exception here — raw IMAP errors can embed credentials.
+            # Don't log raw IMAP errors (credentials).
             logger.error(
                 "poll_inbox_loop iteration failed: %s",
-                "IMAP/pipeline error (details redacted — check credentials in .env)",
+                "IMAP/pipeline error (details redacted - check credentials in .env)",
             )
 
         await asyncio.sleep(interval)

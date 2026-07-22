@@ -19,3 +19,9 @@ async def inbox_status() -> dict[str, str | int | bool | None]:
 @router.get("/inbox/trace/{session_id}")
 async def inbox_trace(session_id: str) -> list[dict]:
     return [e.model_dump(mode="json") for e in audit_log.get_trace(session_id)]
+
+
+@router.get("/inbox/live/{session_id}")
+async def inbox_live_events(session_id: str) -> list[dict]:
+    """Replay buffered agent chat / banner events for an email session."""
+    return audit_log.get_live_events(session_id)

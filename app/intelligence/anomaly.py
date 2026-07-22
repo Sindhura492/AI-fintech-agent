@@ -69,7 +69,7 @@ class AnomalyDetector:
             )
             return
         X = np.asarray(amounts, dtype=float).reshape(-1, 1)
-        # Clamp contamination so sklearn always sees ≥1 expected outlier in fit.
+        # Ensure ≥1 expected outlier in fit.
         cont = min(max(contamination, 1.0 / len(amounts)), 0.5)
         model = IsolationForest(
             n_estimators=100,
@@ -78,9 +78,7 @@ class AnomalyDetector:
         )
         model.fit(X)
         self._models[vendor] = model
-        # Calibrate a novelty threshold: anything less normal than the bottom
-        # ~15% of training scores (or below a fixed floor) is flagged. Pure
-        # predict() under-flags clear extremes on tiny 1-D demos.
+        # Flag bottom ~15% novelty scores (tiny demos).
         train_decisions = model.decision_function(X)
         self._thresholds[vendor] = float(np.percentile(train_decisions, 15))
 

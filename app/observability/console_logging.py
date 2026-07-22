@@ -130,6 +130,7 @@ def setup_logging(*, force: bool = False) -> None:
     )
     handler.setFormatter(ComponentFormatter())
     handler.addFilter(SecretRedactionFilter())
+    handler.addFilter(ImportantOnlyFilter())
 
     root = logging.getLogger()
     root.handlers.clear()
@@ -144,12 +145,103 @@ def setup_logging(*, force: bool = False) -> None:
         "openai",
         "neo4j",
         "uvicorn.access",
+        "uvicorn.error",
         "llama_index",
         "llama_parse",
+        "watchfiles",
+        "multipart",
     ):
         logging.getLogger(name).setLevel(logging.WARNING)
 
     _CONFIGURED = True
+
+
+class ImportantOnlyFilter(logging.Filter):
+    """Keep warnings/errors + key pipeline milestones; drop Cypher/prompt noise."""
+
+    _KEEP_INFO_PREFIXES = (
+        "[PIPELINE]",
+        "[ENFORCEMENT GATE] Decision:",
+        "[ENFORCEMENT GATE] PAYMENT",
+        "[NEO4J] Write confirmed",
+        "[NEO4J] Verified:",
+        "[NEO4J] Connected",
+        "[CLAUDE - EXTRACTION] Response received",
+        "[CLAUDE - EXTRACTION] DEMO_MODE",
+        "[CLAUDE - BUYER] Proposed amount",
+        "[CLAUDE - SUPPLIER] Proposed amount",
+        "[ML - ISOLATION FOREST] Result:",
+        "[SANDBOX] Local parse complete",
+        "[LLAMAPARSE] Received",
+        "Handoff to run_pipeline",
+        "Marked email",
+        "Matched ",
+        "Saved untrusted PDF",
+        "Connected to Neo4j",
+        "NEO4J_TRUST_ALL",
+        "Metrics DB ready",
+        "[NOTIFICATION]",
+        "uid=",
+    )
+
+    _DROP_ALWAYS = (
+        "Desktop notification unavailable",
+        "pyobjus",
+        "ModuleNotFoundError: No module named 'pyobjus'",
+        "Cypher:",
+        "system: You are",
+        "] user: ",
+        "Sending prompt",
+        "Query (vendor context)",
+        "Querying similarity index",
+        "Checking rule ",
+        "Writing transaction node",
+        "LLM is explicitly disabled",
+        "Using MockLLM",
+        "NotImplementedError",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+
+        for needle in self._DROP_ALWAYS:
+            if needle in msg:
+                return False
+
+        if "Fetched " in msg and "unread message" in msg:
+            return False
+        if "has no PDF" in msg:
+            return False
+
+        if record.levelno >= logging.WARNING:
+            return True
+        if record.levelno < logging.INFO:
+            return False
+
+        # INFO: only milestone lines
+        for prefix in self._KEEP_INFO_PREFIXES:
+            if prefix in msg:
+                return True
+        # Allow short [COMPONENT] decision-ish lines
+        if msg.startswith("[") and any(
+            k in msg
+            for k in (
+                "Decision:",
+                "PAYMENT",
+                "Result:",
+                "Proposed amount",
+                "Write confirmed",
+                "Verified:",
+                "DEMO_MODE",
+                "Response received",
+                "Received ",
+            )
+        ):
+            return True
+        return False
 
 
 def get_logger(name: str) -> logging.Logger:

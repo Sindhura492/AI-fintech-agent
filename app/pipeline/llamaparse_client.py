@@ -16,7 +16,7 @@ def parse_with_llamaparse(file_path: str | Path, *, api_key: str) -> str:
 
     path = Path(file_path)
     filename = path.name
-    # Parent process owns Rich [LLAMAPARSE] lines when running in the sandbox child.
+    # Parent logs Rich tags; child stays quiet.
     in_child = os.environ.get("DISPUTE_RESOLVER_SANDBOX_CHILD") == "1"
     if not in_child:
         logger.info("[LLAMAPARSE] Sending %s to LlamaParse API...", filename)

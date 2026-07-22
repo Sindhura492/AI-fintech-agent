@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Agent Finance — Live Negotiation</title>
+  <title>Agent Finance - Live Negotiation</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -685,14 +685,14 @@
     <header>
       <div>
         <h1>Agent Finance</h1>
-        <p>Watch buyer and supplier agents negotiate live — with deterministic verification on every buyer turn.</p>
+        <p>Watch buyer and supplier agents negotiate live - with deterministic verification on every buyer turn.</p>
       </div>
       <div class="header-meta">
         <span id="ws-status" class="badge">Connecting…</span>
         <div class="inbox" id="inbox" title="Gmail IMAP poller">
           <span class="pulse" aria-hidden="true"></span>
           <div>
-            <div>📧 Inbox — listening for new invoices…</div>
+            <div>📧 Inbox - listening for new invoices…</div>
             <div>Processed this session: <strong id="inbox-count">0</strong></div>
           </div>
         </div>
@@ -707,9 +707,9 @@
     <div id="tab-live" class="tab-panel active">
     <div class="controls">
       <select id="sample" aria-label="Sample invoice">
-        <option value="po1001">PO-1001 — Clean match + early-pay discount</option>
-        <option value="po1002">PO-1002 — Small mismatch ~2%</option>
-        <option value="po1003">PO-1003 — Large mismatch ~18%</option>
+        <option value="po1001">PO-1001 - Clean match + early-pay discount</option>
+        <option value="po1002">PO-1002 - Small mismatch ~2%</option>
+        <option value="po1003">PO-1003 - Large mismatch ~18%</option>
       </select>
       <button id="run" type="button">Run Pipeline</button>
     </div>
@@ -758,7 +758,7 @@
       </div>
 
       <div class="mon-card" style="margin-bottom:1.25rem">
-        <h3>Health check — last N runs</h3>
+        <h3>Health check - last N runs</h3>
         <div class="health-row" id="health-row" aria-label="Recent run health"></div>
         <div style="font-size:0.75rem;color:var(--muted)">Green = success · Yellow = escalated · Red = failed/denied</div>
       </div>
@@ -793,7 +793,7 @@
               </tr>
             </thead>
             <tbody id="mon-runs-body">
-              <tr><td colspan="5" style="color:var(--muted)">No runs yet — execute a pipeline to populate metrics.</td></tr>
+              <tr><td colspan="5" style="color:var(--muted)">No runs yet - execute a pipeline to populate metrics.</td></tr>
             </tbody>
           </table>
         </div>
@@ -840,7 +840,7 @@
     }
 
     function formatMoney(n) {
-      if (n == null || Number.isNaN(Number(n))) return "—";
+      if (n == null || Number.isNaN(Number(n))) return "-";
       return `$${Number(n).toLocaleString(undefined, {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
@@ -863,10 +863,10 @@
       const outcomes = ctx.settlement_outcomes || {};
       const avgSettle = outcomes.avg_settlement_amount != null
         ? formatMoney(outcomes.avg_settlement_amount)
-        : "—";
+        : "-";
       const recent = (outcomes.recent || [])
         .map((r) => `${formatMoney(r.final_amount)}${r.agreed_by_both ? "✓" : "✗"}`)
-        .join(", ") || "—";
+        .join(", ") || "-";
       vcGrid.innerHTML = `
         <div><dt>Vendor</dt><dd>${escapeHtml(ctx.vendor_name)}</dd></div>
         <div><dt>Past invoices</dt><dd>${escapeHtml(String(ctx.invoice_count ?? 0))}</dd></div>
@@ -926,13 +926,13 @@
 
       card.className = `review-card ${kind}`;
       const title = kind === "anomaly"
-        ? "🔬 Anomaly flagged — review needed"
-        : "⚠️ Escalation — approval needed";
+        ? "🔬 Anomaly flagged - review needed"
+        : "⚠️ Escalation - approval needed";
       const kindLabel = kind === "anomaly" ? "ML anomaly" : "Gate escalate";
       let bodyMeta = "";
       if (kind === "anomaly") {
         bodyMeta =
-          `<div class="meta">score=${escapeHtml(String(data.anomaly_score ?? "—"))}` +
+          `<div class="meta">score=${escapeHtml(String(data.anomaly_score ?? "-"))}` +
           ` · ${escapeHtml(data.method || "isolation_forest")}</div>` +
           `<div style="margin-top:0.35rem">${escapeHtml(data.explanation || "")}</div>`;
       } else {
@@ -991,14 +991,14 @@
       let statusText = "";
       if (kind === "anomaly") {
         statusText = approved
-          ? "Marked as reviewed / false positive — pipeline decision unchanged."
+          ? "Marked as reviewed / false positive - pipeline decision unchanged."
           : "Confirmed as a real anomaly concern.";
       } else {
         statusText = approved
           ? (data.payment_executed
               ? "Payment executed after human approval."
-              : "Approved — no payment (no settlement on file).")
-          : "Payment blocked — human denied.";
+              : "Approved - no payment (no settlement on file).")
+          : "Payment blocked - human denied.";
       }
 
       card.innerHTML = `
@@ -1101,7 +1101,7 @@
       const label = speaker === "buyer" ? "🏢 Buyer Agent" : "🏢 Supplier Agent";
       const amount = msg.amount != null
         ? `$${Number(msg.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        : "—";
+        : "-";
       const verified = msg.verified
         ? `<div class="verified">✓ Verified against source data</div>`
         : "";
@@ -1112,7 +1112,7 @@
         <div class="bubble">
           <div class="bubble-head">
             <span class="speaker">${label}</span>
-            <span class="round-tag">round ${msg.round_number ?? "—"}</span>
+            <span class="round-tag">round ${msg.round_number ?? "-"}</span>
           </div>
           <div class="bubble-text">${escapeHtml(msg.text || "")}</div>
           <div class="amount">${amount}</div>
@@ -1133,7 +1133,7 @@
         bannerSub.textContent = amt ? `Agreed amount ${amt}` : "Both sides aligned";
       } else {
         banner.className = "bad visible";
-        bannerTitle.textContent = "⏱️ No Convergence — Escalated";
+        bannerTitle.textContent = "⏱️ No Convergence - Escalated";
         bannerSub.textContent = "Handing off to enforcement / human review";
       }
     }
@@ -1160,8 +1160,8 @@
             <span class="step-name">${escapeHtml(entry.step_name || "step")} ${dur}</span>
           </div>
           <dl class="io">
-            <div><dt>Input</dt><dd>${escapeHtml(entry.input_summary || "—")}</dd></div>
-            <div><dt>Output</dt><dd>${escapeHtml(entry.output_summary || "—")}</dd></div>
+            <div><dt>Input</dt><dd>${escapeHtml(entry.input_summary || "-")}</dd></div>
+            <div><dt>Output</dt><dd>${escapeHtml(entry.output_summary || "-")}</dd></div>
           </dl>
         </div>`;
       timeline.appendChild(step);
@@ -1178,7 +1178,7 @@
       else if (action === "deny") { cls = "deny"; label = "DENIED"; }
       gate.className = cls + " visible";
       gateVerdict.textContent = label;
-      gateRule.textContent = details.rule_fired || "—";
+      gateRule.textContent = details.rule_fired || "-";
       gateReason.textContent = fallbackReason || details.reason || "";
     }
 
@@ -1446,18 +1446,18 @@
         const body = document.getElementById("mon-runs-body");
         const runs = data.recent_runs || [];
         if (!runs.length) {
-          body.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">No runs yet — execute a pipeline to populate metrics.</td></tr>`;
+          body.innerHTML = `<tr><td colspan="5" style="color:var(--muted)">No runs yet - execute a pipeline to populate metrics.</td></tr>`;
         } else {
           body.innerHTML = runs.map((r) => {
             const ts = (r.timestamp || "").replace("T", " ").slice(0, 19);
             const amt = r.amount != null
               ? `$${Number(r.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-              : "—";
+              : "-";
             return `<tr>
               <td>${escapeHtml(ts)}</td>
-              <td>${escapeHtml(r.vendor || "—")}</td>
+              <td>${escapeHtml(r.vendor || "-")}</td>
               <td>${escapeHtml(amt)}</td>
-              <td><span class="outcome-pill ${escapeHtml(r.outcome || "")}">${escapeHtml(r.outcome || "—")}</span></td>
+              <td><span class="outcome-pill ${escapeHtml(r.outcome || "")}">${escapeHtml(r.outcome || "-")}</span></td>
               <td style="font-family:IBM Plex Mono,monospace;font-size:0.68rem">${escapeHtml(String(r.session_id || "").slice(0, 8))}…</td>
             </tr>`;
           }).join("");
@@ -1473,7 +1473,7 @@
         try { handleEvent(JSON.parse(event.data)); } catch { /* ignore */ }
       };
       ws.onclose = () => {
-        setWsStatus("Disconnected — retrying…", false);
+        setWsStatus("Disconnected - retrying…", false);
         running = false;
         runBtn.disabled = false;
         setTimeout(connect, 1500);
@@ -1551,6 +1551,11 @@
             if (traceRes.ok) {
               const entries = await traceRes.json();
               for (const entry of entries) appendStep({ ...entry, type: "audit" });
+            }
+            const liveRes = await fetch(`/inbox/live/${data.last_session_id}`);
+            if (liveRes.ok) {
+              const events = await liveRes.json();
+              for (const ev of events) handleEvent(ev);
             }
             const reviewsRes = await fetch(`/reviews/${data.last_session_id}`);
             if (reviewsRes.ok) {

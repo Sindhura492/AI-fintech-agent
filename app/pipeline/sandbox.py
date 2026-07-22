@@ -105,7 +105,7 @@ def parse_document(file_path: str) -> str:
         "PYTHONPATH": ":".join(sys.path),
         "HOME": os.environ.get("HOME", "/tmp"),
         "LOG_LEVEL": get_settings().log_level,
-        # Child should not emit Rich logs onto captured stderr (parent logs tags).
+        # Quiet child stderr; parent owns Rich logs.
         "DISPUTE_RESOLVER_SANDBOX_CHILD": "1",
     }
     if api_key:

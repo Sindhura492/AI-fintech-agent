@@ -195,10 +195,59 @@ def vendor_name_for_email(sender_email: str) -> str | None:
     return None
 
 
+def normalize_vendor_name(name: str) -> str:
+    """Lowercase + strip common legal suffixes for fuzzy vendor matching."""
+    n = (name or "").strip().lower()
+    for suffix in (
+        " llc",
+        " l.l.c.",
+        " inc.",
+        " inc",
+        " ltd.",
+        " ltd",
+        " gmbh",
+        " co.",
+        " co",
+        " corp.",
+        " corp",
+        " limited",
+        " plc",
+    ):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)].rstrip(" ,.")
+            break
+    return " ".join(n.split())
+
+
+def resolve_seed_vendor(vendor_name: str) -> str | None:
+    """Map an extracted vendor string to a canonical seed vendor, if any."""
+    needle = normalize_vendor_name(vendor_name)
+    if not needle:
+        return None
+    # Exact normalized match against known seed vendors
+    known = {po.vendor_name for po in PURCHASE_ORDERS} | set(VENDOR_HISTORY) | set(
+        VENDOR_EMAILS
+    )
+    for name in known:
+        if normalize_vendor_name(name) == needle:
+            return name
+    # Substring match either way.
+    for name in known:
+        canon = normalize_vendor_name(name)
+        if needle in canon or canon in needle:
+            return name
+    return None
+
+
 def open_pos_for_vendor(vendor_name: str) -> list[PurchaseOrder]:
     """Return open POs for a vendor (all seed POs are treated as open)."""
-    vendor_l = vendor_name.strip().lower()
-    return [po for po in PURCHASE_ORDERS if po.vendor_name.lower() == vendor_l]
+    resolved = resolve_seed_vendor(vendor_name) or vendor_name
+    vendor_n = normalize_vendor_name(resolved)
+    return [
+        po
+        for po in PURCHASE_ORDERS
+        if normalize_vendor_name(po.vendor_name) == vendor_n
+    ]
 
 
 def get_vendor_payment_terms(vendor_name: str) -> dict[str, float | int] | None:

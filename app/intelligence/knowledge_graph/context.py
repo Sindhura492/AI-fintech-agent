@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core import ExtractedInvoice, PurchaseOrder
 
-# Optional override for historical seeding (ISO-8601). None → wall clock.
+# Seed timestamp override (ISO-8601); None = now.
 _recorded_at_override: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "kg_recorded_at",
     default=None,
@@ -77,6 +77,15 @@ def format_vendor_context_for_prompt(ctx: dict[str, Any]) -> str:
     ) or "none"
     avg_settle = outcomes.get("avg_settlement_amount")
     avg_settle_txt = f"${avg_settle:,.2f}" if avg_settle is not None else "n/a"
+    from app.agents.bounds import historical_settlement_band
+
+    band = historical_settlement_band(ctx)
+    band_txt = (
+        f"${float(band['min']):,.2f}-${float(band['max']):,.2f} "
+        f"(from {int(band['n'])} past agreed)"
+        if band
+        else "insufficient history"
+    )
     return (
         f"VENDOR KNOWLEDGE GRAPH ({ctx.get('source', 'graph')}):\n"
         f"- Past invoices on record: {ctx.get('invoice_count', 0)}\n"
@@ -86,6 +95,8 @@ def format_vendor_context_for_prompt(ctx: dict[str, Any]) -> str:
         f"- Settlements agreed/not: "
         f"{outcomes.get('agreed_count', 0)}/{outcomes.get('not_agreed_count', 0)} "
         f"(avg settlement {avg_settle_txt})\n"
+        f"- Historical accepted settlement band: {band_txt}\n"
         f"- Recent settlements: {recent_txt}\n"
-        "Use this history to ground your proposal — do not invent vendor facts."
+        "Prefer settling inside the historical accepted band when possible. "
+        "Do not invent vendor facts."
     )

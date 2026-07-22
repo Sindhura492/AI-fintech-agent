@@ -10,10 +10,10 @@ from app.core import (
     ValidationResult,
 )
 
-# Relative tolerance for amount comparisons (covers currency rounding / cents).
+# Amount tolerance (rounding / cents).
 _AMOUNT_TOLERANCE = 0.01  # 1%
 
-# Flag amounts more than this many standard deviations from the vendor mean.
+# Flag if amount is this many σ from vendor mean.
 _ANOMALY_Z_THRESHOLD = 2.0
 
 
@@ -39,7 +39,7 @@ def three_way_match(
     """Compare invoice ↔ purchase order ↔ goods receipt amounts deterministically.
 
     Why deterministic: AP match outcomes drive payment. Soft LLM "looks fine"
-    answers are not acceptable here — reviewers and auditors need a fixed
+    answers are not acceptable here - reviewers and auditors need a fixed
     rule (1% relative tolerance) they can recompute by hand.
 
     A match requires both:
@@ -94,7 +94,7 @@ def three_way_match(
         )
 
     reason = (
-        f"Discrepancy beyond {_AMOUNT_TOLERANCE:.0%} tolerance — "
+        f"Discrepancy beyond {_AMOUNT_TOLERANCE:.0%} tolerance - "
         + "; ".join(parts)
         + "."
     )
@@ -113,7 +113,7 @@ def check_anomaly(
 
     Why statistical (not LLM): anomaly detection for finance must be
     reproducible. A z-score against the vendor's recent invoice amounts is a
-    transparent baseline — mean, std, and threshold (2σ) can be audited —
+    transparent baseline - mean, std, and threshold (2σ) can be audited -
     whereas an LLM cannot guarantee the same flag for the same inputs.
 
     Computes mean and sample standard deviation of ``vendor_history``. Marks
@@ -145,7 +145,7 @@ def check_anomaly(
     if std < 1e-12:
         if abs(amount - mean) < 1e-9:
             return {"is_anomaly": False, "z_score": 0.0}
-        # Constant history, new amount differs — treat as extreme outlier.
+        # Flat history + new amount → extreme outlier.
         return {"is_anomaly": True, "z_score": 99.0}
 
     z_score = (amount - mean) / std

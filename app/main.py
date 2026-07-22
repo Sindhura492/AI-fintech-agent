@@ -4,7 +4,9 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
+from app.api.deps import FRONTEND_DIST
 from app.api.routes_anomaly import router as anomaly_router
 from app.api.routes_escalations import router as escalations_router
 from app.api.routes_health import router as health_router
@@ -69,3 +71,8 @@ app.include_router(pipeline_router)
 app.include_router(escalations_router)
 app.include_router(anomaly_router)
 app.include_router(ws_router)
+
+# React build assets (vite → frontend/dist/assets)
+_assets = FRONTEND_DIST / "assets"
+if _assets.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_assets)), name="frontend-assets")

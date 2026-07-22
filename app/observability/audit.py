@@ -49,6 +49,9 @@ class AuditLog:
         self._sub_lock = threading.Lock()
         self._queues: list[_QueueSub] = []
         self._callbacks: list[SubscriberCallback] = []
+        # Ephemeral UI events for late subscribers.
+        self._live_by_session: dict[str, list[LiveEvent]] = {}
+        self._live_max_per_session = 200
 
     def append(
         self,
@@ -85,7 +88,7 @@ class AuditLog:
 
             metrics_store.on_audit_entry(entry)
         except Exception:
-            # Metrics must never break the pipeline.
+            # Metrics must not break pipeline.
             pass
         return entry
 
@@ -123,8 +126,21 @@ class AuditLog:
             payload["session_id"] = sid
         if "timestamp" not in payload:
             payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+        if sid:
+            with self._sub_lock:
+                buf = self._live_by_session.setdefault(sid, [])
+                buf.append(payload)
+                if len(buf) > self._live_max_per_session:
+                    del buf[: len(buf) - self._live_max_per_session]
         self._fanout(payload, sid)
         return payload
+
+    def get_live_events(self, session_id: str) -> list[LiveEvent]:
+        """Return buffered live UI events for a session (chat / banners)."""
+        if not session_id:
+            return []
+        with self._sub_lock:
+            return list(self._live_by_session.get(session_id, []))
 
     def get_trace(self, session_id: str) -> list[AuditEntry]:
         """Return all audit entries for ``session_id`` in file order."""
@@ -153,6 +169,20 @@ class AuditLog:
         with self._file_lock:
             with self.path.open("a", encoding="utf-8") as fh:
                 fh.write(entry.model_dump_json() + "\n")
+
+    def broadcast(self, event: LiveEvent) -> LiveEvent:
+        """Push an event to every connected WebSocket (ignore session filter)."""
+        payload = dict(event)
+        if "timestamp" not in payload:
+            payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+        with self._sub_lock:
+            queues = list(self._queues)
+        for _filter_sid, queue in queues:
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                continue
+        return payload
 
     def subscribe(
         self,

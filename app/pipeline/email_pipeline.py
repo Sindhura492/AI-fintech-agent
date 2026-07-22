@@ -29,12 +29,19 @@ def run_pipeline_from_email(
     """Email-ingest entry point: sandbox → extract → match_to_po → … or escalate.
 
     If ``match_to_po`` returns None, short-circuits to a GateDecision with
-    ``action="escalate"`` / ``reason="no matching PO found"`` — never runs
+    ``action="escalate"`` / ``reason="no matching PO found"`` - never runs
     three-way match without a PO.
     """
     session_id = session_id or str(uuid.uuid4())
     token = set_session_id(session_id)
     bare = extract_email_address(sender_email)
+
+    try:
+        from app.ingest.email_ingest import mark_active_session
+
+        mark_active_session(session_id, bare or sender_email)
+    except Exception:  # noqa: BLE001
+        pass
 
     invoice: ExtractedInvoice | None = None
     validation: ValidationResult | None = None
@@ -56,7 +63,7 @@ def run_pipeline_from_email(
             source="email",
         )
 
-        # 1. Sandboxed LlamaParse → markdown (llm-backed parse service)
+        # 1. Parse document
         with _timer() as t:
             raw_text = parse_document(file_path)
         _audit(
@@ -85,7 +92,7 @@ def run_pipeline_from_email(
             vendor_name=invoice.vendor_name,
         )
 
-        # 3. Match PO (deterministic) — match_to_po also writes its own AuditEntry
+        # 3. Match PO
         matched = match_to_po(invoice, sender_email)
         _audit(
             "match_to_po_step",
@@ -94,7 +101,7 @@ def run_pipeline_from_email(
             (
                 f"matched {matched.po_id}"
                 if matched
-                else "no matching PO — escalate (no three-way match)"
+                else "no matching PO - escalate (no three-way match)"
             ),
             matched=matched is not None,
             po_id=matched.po_id if matched else None,
@@ -111,7 +118,7 @@ def run_pipeline_from_email(
                 "gate_decision",
                 "deterministic",
                 "match_to_po returned None",
-                f"action=escalate rule_fired={decision.rule_fired} — {decision.reason}",
+                f"action=escalate rule_fired={decision.rule_fired} - {decision.reason}",
                 action=decision.action,
                 rule_fired=decision.rule_fired,
                 reason=decision.reason,
@@ -125,7 +132,21 @@ def run_pipeline_from_email(
                 decision=decision,
                 settlement=None,
                 po_id=None,
+                invoice=invoice,
+                po=None,
+                validation=None,
             )
+            try:
+                from app.intelligence.knowledge_graph import (
+                    get_knowledge_graph,
+                    publish_vendor_context,
+                )
+
+                publish_vendor_context(
+                    get_knowledge_graph().get_vendor_context(invoice.vendor_name)
+                )
+            except Exception:  # noqa: BLE001
+                pass
             persist_pipeline_outcomes(
                 invoice=invoice,
                 po=None,
@@ -137,7 +158,7 @@ def run_pipeline_from_email(
                 "pipeline_complete",
                 "deterministic",
                 f"session_id={session_id}",
-                "short-circuit escalate — no PO; three-way match skipped",
+                "short-circuit escalate - no PO; three-way match skipped",
                 action=decision.action,
                 payment_executed=False,
             )
@@ -154,7 +175,7 @@ def run_pipeline_from_email(
                 payment_executed=False,
             )
 
-        # 4. Matched → normal validate / negotiate / enforce flow
+        # 4. Validate / negotiate / enforce
         resolved_po_id = matched.po_id
         receipts = get_receipts_for_po(resolved_po_id)
         if not receipts:
@@ -189,6 +210,12 @@ def run_pipeline_from_email(
         )
         raise
     finally:
+        try:
+            from app.ingest.email_ingest import clear_active_session
+
+            clear_active_session(session_id)
+        except Exception:  # noqa: BLE001
+            pass
         reset_session_id(token)
 
     return _result_dict(
